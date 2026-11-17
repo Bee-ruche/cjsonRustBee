@@ -5,7 +5,8 @@
      manifest's largest « case_bytes », and each leaf's own bound is the one its unit has there); the empty input;
    - DRAWN cases, from what the leaf's inputs are made of: every byte value, every length up to the leaf's bound,
      the hard paths on purpose (escapes, surrogate pairs whole and broken, texts cut short, comments left open,
-     control characters, zero bytes where a leaf refuses them).
+     control characters, zero bytes where a leaf refuses them), and the longest answers on purpose too (a text kept
+     whole, a text whose every byte is written as six, two texts of unequal lengths up to the bound).
    The order is drawn too. A wrong leaf that is accepted names a path these cases do not reach: add the case here. */
 #include <stdio.h>
 #include <stdlib.h>
@@ -123,10 +124,29 @@ static void json_string(text *t, size_t most)
         put(t, '"');                                                 /* now and then the string is left open */
 }
 
+/* a byte the original keeps outside a string: neither white space, nor a slash, nor a quote, nor zero */
+static int kept(void)
+{
+    int c = 1 + (int)below(255);
+    return c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == '/' || c == '"' ? 'k' : c;
+}
+
 static void minify(text *t)
 {
     static const char *marks = "{}[]:,";
     size_t parts = below(4) ? below(24) : below(120), most = 256;    /* (the leaf's bound: 256 bytes) */
+    if (below(10) == 0) {
+        /* a text the original keeps whole, of any length and often the longest: the answer is as long as the input */
+        size_t n = below(2) ? most - below(4) : below(most + 1);
+        if (below(3) == 0 && n) {
+            put(t, '"');                                             /* one string, left open: all of it is kept */
+            while (--n) { int c = 1 + (int)below(255); put(t, c == '"' ? 'q' : c); }
+            return;
+        }
+        while (n--)
+            put(t, below(3) ? kept() : below(2) ? marks[below(6)] : '0' + (int)below(10));
+        return;
+    }
     while (parts-- && t->length < most) {
         switch (below(14)) {
         case 12: put(t, 1 + (int)below(255)); break;                 /* any byte but zero: every control character, every high byte */
@@ -146,10 +166,33 @@ static void minify(text *t)
         t->length = most;
 }
 
+/* a byte print_string writes as it is: nothing to escape */
+static int plain_byte(void)
+{
+    static const char *plain = "abcdefghijklmnopqrstuvwxyz ABC0189/'{}[]:,~";
+    return below(8) ? plain[below(43)] : 127 + (int)below(129);
+}
+
 static void print_string(text *t)
 {
     size_t n = below(4) ? below(40) : below(257);                    /* (the leaf's bound: 256 bytes) */
     int dense = below(5) == 0;                                       /* nearly every byte needs an escape */
+    size_t kind = below(10);
+    if (kind == 0) {
+        /* the longest answers: a text near the bound whose bytes are nearly all written as six */
+        static const char *six = "\001\002\003\004\005\006\007\013\016\017\020\021\022\023\024\025\026\027\030\031\032\033\034\035\036\037";
+        n = 200 + below(57);
+        while (n--)
+            put(t, below(12) ? six[below(26)] : 32 + (int)below(95));
+        return;
+    }
+    if (kind == 1) {
+        /* a text of any length, often the longest, with nothing to escape */
+        n = below(2) ? below(257) : 256 - below(4);
+        while (n--)
+            put(t, plain_byte());
+        return;
+    }
     while (n--) {
         switch (dense ? below(3) : below(10)) {
         case 0: put(t, 1 + (int)below(31)); break;                   /* a control character */
@@ -164,8 +207,12 @@ static void print_string(text *t)
 
 static void strcasecmp_case(text *t)
 {
-    unsigned char first[32];
-    size_t n = below(32), i, shape = below(16);                      /* (the leaf's bound: 64 bytes, two texts and their zeros) */
+    unsigned char first[64];
+    size_t shape = below(16), wide = below(4) == 0, n, m, i;         /* (the leaf's bound: 64 bytes, two texts and their zeros) */
+    /* one case in four, the two texts share as they like the 62 bytes their zeros leave: a long text and a short one,
+       either way round; otherwise two texts of the same length or nearly */
+    n = wide ? below(63) : below(32);
+    m = wide ? below((n < 62 - n ? n : 62 - n) + 1) : n;             /* how much of the first text the second begins with */
     if (shape == 4)
         return;                                                      /* the empty input: refused */
     for (i = 0; i < n; i++)
@@ -177,19 +224,26 @@ static void strcasecmp_case(text *t)
     put(t, 0);
     if (shape == 0)
         return;                                                      /* one text only: refused */
-    for (i = 0; i < n; i++) {
+    for (i = 0; i < m; i++) {
         int c = first[i];
         if (below(3) == 0 && ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')))
             c ^= 32;                                                 /* the other case */
         put(t, c);
     }
-    if (below(3) == 0 && n)
-        t->bytes[t->length - 1 - below(n)] = (unsigned char)(1 + below(255));   /* one byte differs */
-    if (below(4) == 0)
-        t->length -= below(n + 1);                                   /* a prefix */
-    if (below(4) == 0) { size_t more = 1 + below(3); while (more--) put(t, 'a' + (int)below(26)); }
+    if (below(3) == 0 && m)
+        t->bytes[t->length - 1 - below(m)] = (unsigned char)(1 + below(255));   /* one byte differs */
+    if (wide) {
+        size_t more = below(62 - n - m + 1);                         /* as much more as the bound leaves */
+        while (more--) put(t, 'a' + (int)below(26));
+    } else {
+        if (below(4) == 0)
+            t->length -= below(m + 1);                               /* a prefix */
+        if (below(4) == 0) { size_t more = 1 + below(3); while (more--) put(t, 'a' + (int)below(26)); }
+    }
     if (shape == 1)
         return;                                                      /* no zero byte at the end: refused */
+    if (shape == 6 && t->length > n + 1)
+        t->bytes[n + 1 + below(t->length - n - 1)] = 0;              /* a zero byte inside the second text: refused */
     put(t, 0);
     if (shape == 2)
         put(t, 0);                                                   /* three zero bytes: refused */
@@ -216,6 +270,9 @@ static int special(text *t, const char *leaf, size_t number)
         }
         if (number == 1) { put(t, 'a'); put(t, 0); put(t, 'b'); return 1; }                    /* a zero byte: refused */
         if (number == 2) { put(t, 0); return 1; }
+        if (number == 3) { for (i = 0; i < 256; i++) put(t, '0' + (int)(i % 10)); return 1; }   /* kept whole: the longest answer */
+        if (number == 4) { put(t, '"'); for (i = 1; i < 256; i++) put(t, i % 2 ? ' ' : '/'); return 1; }   /* an open string, kept whole */
+        if (number < 5 + 257) { for (i = 0; i < number - 5; i++) put(t, kept()); return 1; }   /* every length up to the bound, kept whole */
     } else if (!strcmp(leaf, "print_string")) {
         if (number == 0) {
             for (i = 0; i < 256; i++) put(t, i % 4 == 0 ? 1 + (int)(i % 31) : i % 4 == 1 ? '"' : i % 4 == 2 ? '\\' : 'a' + (int)(i % 26));
@@ -223,6 +280,17 @@ static int special(text *t, const char *leaf, size_t number)
         }
         if (number == 1) { put(t, 'a'); put(t, 0); put(t, 'b'); return 1; }                    /* a zero byte: refused */
         if (number == 2) { put(t, 0); return 1; }
+        if (number == 3) { for (i = 0; i < 256; i++) put(t, 1); return 1; }                    /* the longest answer there is */
+        if (number == 4) { for (i = 0; i < 256; i++) put(t, 'a' + (int)(i % 26)); return 1; }  /* the longest text with nothing to escape */
+        if (number == 5) { for (i = 0; i < 255; i++) put(t, 'a' + (int)(i % 26)); return 1; }
+        /* every length up to the bound, twice: with nothing to escape, then with at least one byte to escape */
+        if (number < 6 + 257) { for (i = 0; i < number - 6; i++) put(t, plain_byte()); return 1; }
+        if (number < 6 + 2 * 257) {
+            size_t n = number - 6 - 257, at = n ? below(n) : 0;
+            for (i = 0; i < n; i++)
+                put(t, i == at || below(6) == 0 ? "\001\037\"\\\b\f\n\r\t\013"[below(10)] : plain_byte());
+            return 1;
+        }
     } else {
         /* two texts of 31 bytes: equal but for their case (0); then differing at their last byte only, both ways;
            then one a prefix of the other; then the shapes that are refused */
@@ -245,6 +313,14 @@ static int special(text *t, const char *leaf, size_t number)
         if (number == 11) { put(t, 0); put(t, 'a'); put(t, 0); return 1; }                     /* an empty text and another */
         if (number == 12) { put(t, 'a'); put(t, 0); put(t, 0); return 1; }
         if (number == 13) { put(t, 'a'); put(t, 0); put(t, 'a'); put(t, 0); put(t, 0); return 1; }   /* three zero bytes: refused */
+        if (number == 14) { puts_in(t, "ab"); put(t, 0); put(t, 'c'); put(t, 0); put(t, 'd'); put(t, 0); return 1; }   /* a zero byte inside the second text: refused */
+        if (number == 15) { put(t, 'a'); put(t, 0); put(t, 0); put(t, 'b'); put(t, 0); return 1; }
+        /* a long text and a short one, either way round, up to the bound */
+        if (number == 16) { for (i = 0; i < 40; i++) put(t, 'a'); put(t, 0); put(t, 'b'); put(t, 0); return 1; }
+        if (number == 17) { put(t, 'b'); put(t, 0); for (i = 0; i < 40; i++) put(t, 'a'); put(t, 0); return 1; }
+        if (number == 18) { for (i = 0; i < 62; i++) put(t, 'A' + (int)(i % 26)); put(t, 0); put(t, 0); return 1; }
+        if (number == 19) { put(t, 0); for (i = 0; i < 62; i++) put(t, 'A' + (int)(i % 26)); put(t, 0); return 1; }
+        if (number == 20) { for (i = 0; i < 33; i++) put(t, 'a'); put(t, 0); for (i = 0; i < 29; i++) put(t, 'A'); put(t, 0); return 1; }
     }
     return 0;
 }
@@ -262,7 +338,9 @@ static const char *FIXED_UTF16[] = {
     /* the longest input the leaf is given, and a pair with as much after it as fits */
     "\\u0041aaaaaaaaaaaaaaaaaaaaaaaaaa", "\\ud800\\udc00aaaaaaaaaaaaaaaaaaaa"};
 static const char *FIXED_MINIFY[] = {"", "{ \"a\" : 1 }", "[1, 2, 3] // end", "/* open", "\"un\\\"closed", "{\"a\":\"b // not a comment\"}", " \t\r\n", "/", "a/b",
-                                     "a\fb", "a\vb", "a\001b", "a\037b", "a\177b", "a\200b", "a\377b", "\"a\fb\tc\"", "// a\rb\nc", "/*/ x */y", "a\\b"};
+                                     "a\fb", "a\vb", "a\001b", "a\037b", "a\177b", "a\200b", "a\377b", "\"a\fb\tc\"", "// a\rb\nc", "/*/ x */y", "a\\b",
+                                     /* a backslash outside a string protects nothing */
+                                     "\\\"a b\"", "a\\/b", "\\ a\\\tb", "\\// c\nd", "\\/* c */d"};
 static const char *FIXED_PRINT[] = {"", "plain", "quote \" and \\ slash", "tab\there", "\x01\x1f", "caf\xc3\xa9", "\x7f\x80\xff", "\b\f\n\r\t\v",
     /* more bytes to escape than a small counter holds */
     "\001\001\001\001\001\001\001\001\001\001\001\001\001\001\001\001\001\001\001\001\001\001\001\001\001\001\001\001\001\001"
