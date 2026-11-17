@@ -1,0 +1,39 @@
+#!/bin/sh
+# One leaf's driver: « build-unit <leaf> », a nonce (hexadecimal) on its input, the binary left as /out/driver.
+# What is built: the port's lib.rs with that leaf alone, and the project's driver. The nonce seeds the order the
+# linker lays the binary's sections in, and the size of a padding: where a leaf's code and data lie follows it.
+# (BEE_SRC and BEE_OUT name other folders than /src and /out: bee/check.sh gives them, the judge does not.)
+set -eu
+leaf="$1"
+src="${BEE_SRC:-/src}" out="${BEE_OUT:-/out}"
+work=$(mktemp -d)
+nonce=$(head -c 64)
+seed=$(( 0x$(printf %s "$nonce" | cut -c1-7) + 1 ))
+padding=$(( 0x$(printf %s "$nonce" | cut -c8-11) % 4096 + 16 ))
+# The project's own rule on what a leaf's file may hold, checked on its text before anything is built (comments
+# and strings included: nothing is parsed, so nothing can hide): port/LEAVES.md says the same to who writes a leaf.
+words='static|unsafe|extern|macro_rules|include|include_str|include_bytes|env|option_env|concat_idents|asm|global_asm|mod'
+# (« 'static », the lifetime of a constant, is not the word « static »: it is taken out before the words are looked for.)
+if sed "s/'static//g" "$src/port/src/$leaf.rs" | grep -Ewn "$words" >&2; then
+    echo "build-unit: a leaf's file may not hold these words (port/LEAVES.md)" >&2
+    exit 1
+fi
+if grep -n '#' "$src/port/src/$leaf.rs" >&2; then
+    echo "build-unit: a leaf's file may not hold the character # (port/LEAVES.md)" >&2
+    exit 1
+fi
+# (« for » and « < » with only blanks between them, line ends included, and a lifetime after: a type « for<'a> … ».)
+if tr '\n\t\r' '   ' < "$src/port/src/$leaf.rs" | grep -Eq "(^|[^A-Za-z0-9_])for *< *'"; then
+    echo "build-unit: a leaf's file may not hold a type written « for<'a> … » (port/LEAVES.md)" >&2
+    exit 1
+fi
+common="--edition 2021 -C panic=abort -C opt-level=2 -C overflow-checks=on -C debug-assertions=off -C codegen-units=1"
+# shellcheck disable=SC2086
+rustc $common --cfg "unit=\"$leaf\"" --crate-type rlib --crate-name port -o "$work/libport.rlib" "$src/port/src/lib.rs"
+printf '#[no_mangle]\npub static BEE_PADDING: [u8; %s] = [1; %s];\n' "$padding" "$padding" > "$work/padding.rs"
+# shellcheck disable=SC2086
+rustc $common --crate-type rlib --crate-name padding -o "$work/libpadding.rlib" "$work/padding.rs"
+# shellcheck disable=SC2086
+rustc $common --extern port="$work/libport.rlib" --extern padding="$work/libpadding.rlib" \
+      -C link-arg=-fuse-ld=lld -C "link-arg=-Wl,--shuffle-sections=*=$seed" -C link-arg=-Wl,--undefined=BEE_PADDING \
+      -o "$out/driver" "$src/harness/rust/driver.rs"

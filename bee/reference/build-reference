@@ -1,0 +1,10 @@
+#!/bin/sh
+# The reference's side, built in its own container (no candidate's file is here): the reference's driver, with the
+# sanitizers that stop it on a read or a write outside a block or on undefined arithmetic, and the generator of
+# cases. Both are left in /out.
+# (BEE_SRC and BEE_OUT name other folders than /src and /out: bee/check.sh gives them, the judge does not.)
+set -eu
+src="${BEE_SRC:-/src}" out="${BEE_OUT:-/out}"
+cc -O1 -g -std=gnu99 -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer \
+   -o "$out/reference" "$src/harness/c/reference_driver.c" -lm
+cc -O1 -std=gnu99 -Wall -Wextra -Werror -o "$out/generate" "$src/harness/c/generate.c"

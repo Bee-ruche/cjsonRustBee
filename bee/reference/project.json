@@ -1,0 +1,84 @@
+{
+  "image": "rust",
+  "reference": [
+    "reference",
+    "harness/c",
+    "bee/reference"
+  ],
+  "skeleton": [
+    "port/src/lib.rs",
+    "harness/rust",
+    "bee/reference/build-unit"
+  ],
+  "units": {
+    "hex4": {
+      "files": [
+        "port/src/hex4.rs"
+      ],
+      "blank": [
+        "port/blank.rs"
+      ],
+      "cases": 4000,
+      "case_bytes": 16,
+      "answer_bytes": 112,
+      "refuses": true
+    },
+    "utf16": {
+      "files": [
+        "port/src/utf16.rs"
+      ],
+      "blank": [
+        "port/blank.rs"
+      ],
+      "cases": 6000,
+      "case_bytes": 32,
+      "answer_bytes": 208,
+      "refuses": true
+    },
+    "minify": {
+      "files": [
+        "port/src/minify.rs"
+      ],
+      "blank": [
+        "port/blank.rs"
+      ],
+      "cases": 3000,
+      "case_bytes": 256,
+      "answer_bytes": 1552,
+      "refuses": true
+    },
+    "print_string": {
+      "files": [
+        "port/src/print_string.rs"
+      ],
+      "blank": [
+        "port/blank.rs"
+      ],
+      "cases": 3000,
+      "case_bytes": 256,
+      "answer_bytes": 1552,
+      "refuses": true
+    },
+    "strcasecmp": {
+      "files": [
+        "port/src/strcasecmp.rs"
+      ],
+      "blank": [
+        "port/blank.rs"
+      ],
+      "cases": 3000,
+      "case_bytes": 64,
+      "answer_bytes": 400,
+      "refuses": true
+    }
+  },
+  "variants": 3,
+  "runs": 2,
+  "build_seconds": 120,
+  "run_seconds": 20,
+  "reference_seconds": 120,
+  "memory_mb": 1024,
+  "build_processes": 128,
+  "output_mb": 64,
+  "unit_bytes": 65536
+}
