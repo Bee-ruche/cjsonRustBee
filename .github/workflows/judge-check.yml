@@ -1,0 +1,58 @@
+# The judge's side of every unit, on each pull request: the question the hive's judge asks of the project's tip
+# itself (« does the machine work? », docs/reference-judge.md of Bee-ruche/hive): the manifest and its bounds, the
+# reference and the generator built in their container (the generator with -Werror), the control (the blank leaf
+# built twice with two nonces, two different binaries, nothing written on no case), cases drawn and their expected
+# answers framed as the judge wants, for every unit of bee/reference/project.json. No leaf is judged here.
+#
+# The judge is Bee-ruche/hive's, at the commit .github/workflows/hive.yml runs (move both together). The project's
+# code runs only in the judge's containers, without network; this workflow holds no secret and reads only.
+name: Judge check
+on:
+  pull_request:
+permissions:
+  contents: read
+
+jobs:
+  tip-itself:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: project
+          persist-credentials: false
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: Bee-ruche/hive
+          ref: 64615af6c03c3a40332c787f545a5ffb448be208
+          path: protocol
+          persist-credentials: false
+      - name: The tip, written out without its repository (the judge refuses a tree that is one)
+        run: |
+          mkdir tip
+          git -C project archive HEAD | tar -x -C tip
+      - name: The judge's image (with network; the hive's own Dockerfile, nothing of the project)
+        run: python3 -B protocol/tools/judge/reference.py --tip tip --image-only
+      - name: The tip itself, unit by unit (the project's code runs only in the judge's containers, without network)
+        run: |
+          python3 -B - <<'EOF'
+          import json, re, subprocess, sys
+          units = json.load(open("tip/bee/reference/project.json"))["units"]
+          budget = int(json.load(open("tip/hive/project.json"))["judge"]["timeout_seconds"])
+          failed = []
+          for name, unit in units.items():
+              if not re.fullmatch(r"[a-z0-9_]{1,32}", name):
+                  sys.exit("the manifest names a unit the judge would not take")
+              command = [sys.executable, "-B", "protocol/tools/judge/reference.py", "--tip", "tip", "--unit", name,
+                         "--tip-itself", "--budget", str(budget), "--workdir", "work"]
+              for path in unit["files"]:
+                  command += ["--task-file", path]
+              print(f"::group::{name}", flush=True)
+              code = subprocess.run(command).returncode
+              print("::endgroup::", flush=True)
+              print(f"{name}: " + ("ready" if code == 0 else f"FAILED (code {code})"), flush=True)
+              if code != 0:
+                  failed.append(name)
+          sys.exit(f"the judge failed on the tip itself for: {', '.join(failed)}" if failed else 0)
+          EOF
