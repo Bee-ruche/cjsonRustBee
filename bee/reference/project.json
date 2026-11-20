@@ -70,6 +70,42 @@
       "case_bytes": 64,
       "answer_bytes": 400,
       "refuses": true
+    },
+    "parse_number": {
+      "files": [
+        "port/src/parse_number.rs"
+      ],
+      "blank": [
+        "port/blank.rs"
+      ],
+      "cases": 4000,
+      "case_bytes": 256,
+      "answer_bytes": 1552,
+      "refuses": true
+    },
+    "compare_double": {
+      "files": [
+        "port/src/compare_double.rs"
+      ],
+      "blank": [
+        "port/blank.rs"
+      ],
+      "cases": 3000,
+      "case_bytes": 32,
+      "answer_bytes": 208,
+      "refuses": true
+    },
+    "print_number": {
+      "files": [
+        "port/src/print_number.rs"
+      ],
+      "blank": [
+        "port/blank.rs"
+      ],
+      "cases": 3000,
+      "case_bytes": 16,
+      "answer_bytes": 112,
+      "refuses": true
     }
   },
   "variants": 3,

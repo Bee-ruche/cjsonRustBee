@@ -6,6 +6,9 @@
 
    Framing (the judge's): cases « <u32 length><bytes> »…, answers « <u32 index><u8 status><u32 length><bytes> »…,
    little-endian; status 0 with the answer, or 1, a refusal, with nothing. */
+#ifdef ENABLE_LOCALES
+#error "the leaves of numbers take '.' as the decimal point: the reference is built without ENABLE_LOCALES"
+#endif
 #include "../../reference/cJSON.c"
 
 typedef int (*leaf_function)(const unsigned char *in, size_t n, unsigned char *out, size_t cap, size_t *len);
@@ -89,6 +92,81 @@ static int leaf_strcasecmp(const unsigned char *in, size_t n, unsigned char *out
     return 0;
 }
 
+/* The leaves of numbers: a double is given (and parse_number answers one) as its eight bytes, the IEEE 754 binary64
+   pattern, low byte first; an int as its four, low byte first, two's complement. The original's decimal point is the
+   locale's only when it is built with ENABLE_LOCALES: it is not (above), so it is '.', whatever the locale. */
+static double double_at(const unsigned char *in)
+{
+    unsigned long long bits = 0;
+    double d;
+    int i;
+    for (i = 7; i >= 0; i--)
+        bits = bits << 8 | in[i];
+    memcpy(&d, &bits, sizeof d);
+    return d;
+}
+
+static void put_le(unsigned char *out, unsigned long long value, int count)
+{
+    int i;
+    for (i = 0; i < count; i++)
+        out[i] = (unsigned char)(value >> (8 * i));
+}
+
+static int leaf_parse_number(const unsigned char *in, size_t n, unsigned char *out, size_t cap, size_t *len)
+{
+    parse_buffer buffer;
+    cJSON item;
+    unsigned long long bits;
+    if (cap < 14)
+        return 1;
+    /* the input is the whole buffer, read from its start (the count read fits two bytes: the unit's cases are 256
+       bytes at most) */
+    memset(&buffer, 0, sizeof buffer);
+    buffer.content = in;
+    buffer.length = n;
+    buffer.hooks = global_hooks;
+    memset(&item, 0, sizeof item);
+    if (!parse_number(&item, &buffer))
+        return 1;
+    memcpy(&bits, &item.valuedouble, sizeof bits);
+    put_le(out, buffer.offset, 2);
+    put_le(out + 2, bits, 8);
+    put_le(out + 10, (unsigned)item.valueint, 4);
+    *len = 14;
+    return 0;
+}
+
+static int leaf_compare_double(const unsigned char *in, size_t n, unsigned char *out, size_t cap, size_t *len)
+{
+    if (n != 16 || cap < 1)
+        return 1; /* two doubles, exactly */
+    out[0] = compare_double(double_at(in), double_at(in + 8)) ? 1 : 0;
+    *len = 1;
+    return 0;
+}
+
+static int leaf_print_number(const unsigned char *in, size_t n, unsigned char *out, size_t cap, size_t *len)
+{
+    printbuffer buffer;
+    cJSON item;
+    unsigned valueint;
+    if (n != 12)
+        return 1; /* a double and an int, exactly */
+    valueint = in[8] | in[9] << 8 | in[10] << 16 | (unsigned)in[11] << 24;
+    memset(&item, 0, sizeof item);
+    item.valuedouble = double_at(in);
+    item.valueint = valueint <= INT_MAX ? (int)valueint : -(int)~valueint - 1;
+    memset(&buffer, 0, sizeof buffer);
+    buffer.buffer = out;
+    buffer.length = cap;
+    buffer.noalloc = true;
+    if (!print_number(&item, &buffer))
+        exit(4); /* the buffer is large enough for every answer: this is the harness's own fault */
+    *len = buffer.offset;
+    return 0;
+}
+
 static unsigned long u32_at(const unsigned char *p) { return p[0] | (p[1] << 8) | (p[2] << 16) | ((unsigned long)p[3] << 24); }
 
 static void put_u32(FILE *f, unsigned long v)
@@ -101,7 +179,8 @@ static void put_u32(FILE *f, unsigned long v)
 int main(int argc, char **argv)
 {
     static const struct { const char *name; leaf_function leaf; } leaves[] = {
-        {"hex4", leaf_hex4}, {"utf16", leaf_utf16}, {"minify", leaf_minify}, {"print_string", leaf_print_string}, {"strcasecmp", leaf_strcasecmp}};
+        {"hex4", leaf_hex4}, {"utf16", leaf_utf16}, {"minify", leaf_minify}, {"print_string", leaf_print_string}, {"strcasecmp", leaf_strcasecmp},
+        {"parse_number", leaf_parse_number}, {"compare_double", leaf_compare_double}, {"print_number", leaf_print_number}};
     leaf_function leaf = NULL;
     FILE *in, *out;
     unsigned char *cases;

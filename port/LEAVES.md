@@ -11,6 +11,20 @@ and the answer are. « Refused » means `Err(())`.
 | `minify` | `cJSON_Minify` | a text without a zero byte (with one: refused) | the minified text |
 | `print_string` | `print_string_ptr` | a text without a zero byte (with one: refused) | the text as a JSON string, quotes included |
 | `strcasecmp` | `case_insensitive_strcmp` | two texts, each ended by one zero byte: `first 0 second 0` (anything else: refused) | four bytes: the number the original returns, low byte first, as a 32-bit two's complement |
+| `parse_number` | `parse_number` | any bytes: the text the original is asked to read a number from, at its start, and what follows | fourteen bytes: the count of input bytes the original read (two bytes, low byte first), then the `valuedouble` it set (a double, below), then the `valueint` it set (four bytes, low byte first, as a 32-bit two's complement); refused when the original fails |
+| `compare_double` | `compare_double` | exactly sixteen bytes: two doubles (below), `a` then `b` (any other length: refused) | one byte: 1 when the original says they are equal, else 0 |
+| `print_number` | `print_number` | exactly twelve bytes: an item's `valuedouble` (a double, below), then its `valueint` (four bytes, low byte first, as a 32-bit two's complement) (any other length: refused) | the text the original writes, without its zero byte |
+
+## The leaves of numbers
+
+A double, given or answered, is its eight bytes: the IEEE 754 binary64 pattern, low byte first. Any pattern may be
+given: zeros of both signs, subnormals, infinities, NaNs.
+
+The original takes its decimal point from the C library's locale only when it is built with `ENABLE_LOCALES`; the
+reference is not, so the decimal point is `.`. Where the original calls the C library (`strtod`, `sprintf`,
+`sscanf`), the library's answer is part of the specification: the reference's is the GNU C library of the judge's
+image (Ubuntu 24.04), which converts exactly: a decimal text to the nearest double (the even one in a tie), and a
+double to as many digits as asked (its exact value rounded to the nearest, the even digit in a tie).
 
 ## What a leaf's file may hold
 

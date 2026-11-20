@@ -37,3 +37,18 @@ pub const ANSWER: Leaf = print_string::answer;
 pub mod strcasecmp;
 #[cfg(unit = "strcasecmp")]
 pub const ANSWER: Leaf = strcasecmp::answer;
+
+#[cfg(unit = "parse_number")]
+pub mod parse_number;
+#[cfg(unit = "parse_number")]
+pub const ANSWER: Leaf = parse_number::answer;
+
+#[cfg(unit = "compare_double")]
+pub mod compare_double;
+#[cfg(unit = "compare_double")]
+pub const ANSWER: Leaf = compare_double::answer;
+
+#[cfg(unit = "print_number")]
+pub mod print_number;
+#[cfg(unit = "print_number")]
+pub const ANSWER: Leaf = print_number::answer;
