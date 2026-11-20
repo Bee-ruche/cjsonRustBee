@@ -6,6 +6,8 @@
   registry's (`docs/reference-judge.md` there): it runs these scripts in containers without network.
 - `check.sh`: the quick check of one leaf, for who writes it: the same scripts, on cases drawn now.
 - `sandbox/`: where project code runs on your machine, and nowhere else.
+- `../.github/workflows/judge-check.yml`: on each pull request, the hive's judge asks the tip itself, unit by unit,
+  whether the machine works (the manifest, the reference and the generator, the control, cases drawn and framed).
 
 ## Sandbox
 
