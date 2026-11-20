@@ -340,16 +340,16 @@ static void put_int(text *t, unsigned value)
 #define GREATEST 0x7FEFFFFFFFFFFFFFULL
 
 /* the doubles every leaf of numbers meets often, as patterns: the zeros, the subnormals' bounds, the greatest double,
-   the infinities and NaNs (quiet, signalling, negative), 1, DBL_EPSILON, an int's bounds, 2^53 */
+   the infinities and NaNs (quiet, signalling, negative), 1, DBL_EPSILON, an int's bounds, 2^53, 2^-1023 and its next */
 static const unsigned long long EDGE_BITS[] = {
     0x0000000000000000ULL, 0x8000000000000000ULL, 0x0000000000000001ULL, 0x000FFFFFFFFFFFFFULL, 0x0010000000000000ULL,
     0x7FEFFFFFFFFFFFFFULL, 0x7FF0000000000000ULL, 0xFFF0000000000000ULL, 0x7FF8000000000000ULL, 0xFFF8000000000000ULL,
     0x7FF0000000000001ULL, 0x7FFFFFFFFFFFFFFFULL, 0x3FF0000000000000ULL, 0x3CB0000000000000ULL, 0x41DFFFFFFFC00000ULL,
-    0xC1E0000000000000ULL, 0x4340000000000000ULL};
+    0xC1E0000000000000ULL, 0x4340000000000000ULL, 0x0008000000000000ULL, 0x0008000000000001ULL};
 
 /* and as values: what %g writes in one style or the other (its bounds 1e-5, 1e-4, 1e15, 1e17), what 15 digits do not give
-   back exactly (0.1 + 0.2: the original's comparison takes it anyway; 1/3: it does not), powers of two whose 17th
-   digit is followed by a 5 alone (2^-25: the middle, rounded to the even digit), an int's bounds and their halves */
+   back exactly (0.1 + 0.2: the original's comparison takes it anyway; 1/3: it does not), powers of two (2^-25: its 18
+   digits end in a 5 alone after the 17th, a tie, rounded to the even digit), an int's bounds and their halves */
 static const double EDGE_VALUES[] = {
     0.1, 0.2, 0.3, 0.1 + 0.2, 1.0 / 3, 2.0 / 3, 0.5, 1.5, 2.5, 100, 1e-5, 1e-4, 0.000123456789012345, 9.99999999999999e-5,
     1e15, 1e16, 1e17, 1e21, 1e22, 1e23, 1e100, 123456789012345.0, 999999999999999.0, 1234567890123456.0, 0x1p-25, 0x1p-26,
@@ -357,7 +357,7 @@ static const double EDGE_VALUES[] = {
     2.2250738585072014e-308, 4.9406564584124654e-324};
 
 /* a double, its pattern: an edge, any pattern, an integer, a short decimal (the nearest double to k·10^±j), a power of
-   two, any between 2^-70 and 2^70; now and then of the other sign, or a few units in the last place away */
+   two, a subnormal, any between 2^-70 and 2^70; now and then of the other sign, or a few units in the last place away */
 static unsigned long long some_double(void)
 {
     unsigned long long bits, k;
@@ -377,6 +377,7 @@ static unsigned long long some_double(void)
         bits = bits_of(below(2) ? (double)k / scale : (double)k * scale);
         break;
     case 6: bits = (unsigned long long)below(2047) << 52; break;
+    case 7: bits = next() & 0xFFFFFFFFFFFFFULL; break;
     default: bits = (unsigned long long)(1023 - 70 + below(141)) << 52 | (next() & 0xFFFFFFFFFFFFFULL); break;
     }
     if (below(4) == 0)
@@ -432,13 +433,20 @@ static void print_number_case(text *t)
 /* compare_double's fixed pairs, a then b, as patterns. The original says equal when |a - b| <= max(|a|, |b|)·DBL_EPSILON:
    around 1 and 2, the pairs a unit in the last place inside that bound, outside it, and on it (<=, not <); the
    infinities (an infinity is equal to every finite double and to the other infinity, not to itself: inf - inf is NaN);
-   NaN, equal to nothing; the subnormals (the bound is 0 there: only the same one is equal); a difference that overflows */
+   NaN, equal to nothing; the subnormals (below 2^-1023 the bound is 0: only the same one is equal; at 2^-1023 it is
+   2^-1075, rounded to the even 0; above it, up to the least normal, it rounds to the least subnormal: one unit apart is
+   equal, two are not), in both orders and of both signs; a difference that overflows */
 static const unsigned long long FIXED_COMPARE[][2] = {
     {0, 0}, {0, SIGN}, {ONE, ONE}, {ONE, ONE + 1}, {ONE, ONE + 2}, {ONE, ONE - 1}, {ONE, ONE - 2}, {ONE, ONE - 3},
     {TWO, TWO + 1}, {TWO, TWO + 2}, {TWO - 1, TWO}, {TWO - 2, TWO}, {TWO - 3, TWO}, {ONE | SIGN, (ONE - 2) | SIGN},
     {INFINITE, INFINITE}, {INFINITE | SIGN, INFINITE | SIGN}, {INFINITE, INFINITE | SIGN}, {INFINITE | SIGN, INFINITE},
     {INFINITE, ONE}, {ONE, INFINITE | SIGN}, {INFINITE, GREATEST}, {INFINITE, 0}, {QUIET_NAN, QUIET_NAN}, {QUIET_NAN, ONE},
-    {0, QUIET_NAN}, {QUIET_NAN, INFINITE}, {INFINITE + 1, INFINITE + 1}, {1, 0}, {1, 1}, {1, 2}, {1, SIGN | 1},
+    {0, QUIET_NAN}, {QUIET_NAN, INFINITE}, {INFINITE + 1, INFINITE + 1}, {1, 0}, {1, 1}, {1, 2}, {1, SIGN | 1}, {3, 2},
+    {0x000FFFFFFFFFFFFFULL, 0x000FFFFFFFFFFFFEULL}, {0x000FFFFFFFFFFFFEULL, 0x000FFFFFFFFFFFFFULL},
+    {SIGN | 0x000FFFFFFFFFFFFEULL, SIGN | 0x000FFFFFFFFFFFFFULL}, {0x000FFFFFFFFFFFFDULL, 0x000FFFFFFFFFFFFFULL},
+    {0x0008000000000001ULL, 0x0008000000000000ULL}, {0x0008000000000000ULL, 0x0008000000000001ULL},
+    {0x0008000000000002ULL, 0x0008000000000000ULL}, {0x0008000000000000ULL, 0x0007FFFFFFFFFFFFULL},
+    {SIGN | 0x0007FFFFFFFFFFFFULL, SIGN | 0x0008000000000000ULL}, {0x0007FFFFFFFFFFFFULL, 0x0007FFFFFFFFFFFEULL},
     {GREATEST, GREATEST | SIGN}, {GREATEST, GREATEST - 1}, {0x0010000000000000ULL, 0x000FFFFFFFFFFFFFULL}};
 
 /* print_number's fixed cases beside the edges: a double and the valueint beside it. The original writes valueint alone

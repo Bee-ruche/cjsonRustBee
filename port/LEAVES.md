@@ -26,6 +26,9 @@ reference is not, so the decimal point is `.`. Where the original calls the C li
 image (Ubuntu 24.04), which converts exactly: a decimal text to the nearest double (the even one in a tie), and a
 double to as many digits as asked (its exact value rounded to the nearest, the even digit in a tie).
 
+The judge builds with rustc 1.75, whose `core` gives `f64` less than `std` does: no `abs`, `floor` or `powi`
+there (they came to `core` later); its bits (`to_bits`, `from_bits`) are there.
+
 ## What a leaf's file may hold
 
 A leaf is plain Rust over `core`: no `std`, no allocation, no `unsafe` (the build refuses them). Its file also
@@ -46,3 +49,6 @@ leaf before it is published: one that is right by a trick is removed.
 
 The output buffer a leaf is given is zeroed and holds `6 × (input length) + 16` bytes: more than any right answer.
 A leaf is a function of its input alone: the same input, the same answer, whatever was asked before.
+
+The build checks integer arithmetic (`-C overflow-checks=on`): an overflow, like an index out of bounds, ends the
+run at once, and the leaf is refused.
