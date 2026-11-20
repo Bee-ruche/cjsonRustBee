@@ -37,22 +37,40 @@ jobs:
       - name: The tip itself, unit by unit (the project's code runs only in the judge's containers, without network)
         run: |
           python3 -B - <<'EOF'
-          import json, re, subprocess, sys
+          import json, os, re, shutil, subprocess, sys, time
           units = json.load(open("tip/bee/reference/project.json"))["units"]
           budget = int(json.load(open("tip/hive/project.json"))["judge"]["timeout_seconds"])
+          os.makedirs("reports")
+
+          def judge(tree, name, files):
+              """The judge's code and its report (the step it reached, the seed it drew)."""
+              report = f"reports/{tree}-{name}.json"
+              command = [sys.executable, "-B", "protocol/tools/judge/reference.py", "--tip", tree, "--unit", name,
+                         "--tip-itself", "--budget", str(budget), "--workdir", "work", "--json", report]
+              for path in files:
+                  command += ["--task-file", path]
+              start = time.monotonic()
+              print(f"::group::{tree}: {name}", flush=True)
+              code = subprocess.run(command).returncode
+              print("::endgroup::", flush=True)
+              said = json.load(open(report)) if os.path.exists(report) else {}
+              print(f"{tree}: {name}: code {code}, step {said.get('step')}, seed {said.get('seed_origin')}, "
+                    f"{time.monotonic() - start:.1f} s" + (f", {said['reason']}" if "reason" in said else ""), flush=True)
+              return code
+
           failed = []
           for name, unit in units.items():
               if not re.fullmatch(r"[a-z0-9_]{1,32}", name):
                   sys.exit("the manifest names a unit the judge would not take")
-              command = [sys.executable, "-B", "protocol/tools/judge/reference.py", "--tip", "tip", "--unit", name,
-                         "--tip-itself", "--budget", str(budget), "--workdir", "work"]
-              for path in unit["files"]:
-                  command += ["--task-file", path]
-              print(f"::group::{name}", flush=True)
-              code = subprocess.run(command).returncode
-              print("::endgroup::", flush=True)
-              print(f"{name}: " + ("ready" if code == 0 else f"FAILED (code {code})"), flush=True)
-              if code != 0:
+              if judge("tip", name, unit["files"]) != 0:
                   failed.append(name)
-          sys.exit(f"the judge failed on the tip itself for: {', '.join(failed)}" if failed else 0)
+          # A known failure, so that this check is seen to fail when it should: the same tip with a generator that does
+          # not build must be a failure to judge (code 2).
+          shutil.copytree("tip", "broken")
+          with open("broken/harness/c/generate.c", "a") as f:
+              f.write("\n#error a known failure: the check must see it\n")
+          first = next(iter(units))
+          if judge("broken", first, units[first]["files"]) != 2:
+              failed.append("the known failure (a generator that does not build) was not seen")
+          sys.exit("the judge check failed: " + "; ".join(failed) if failed else 0)
           EOF
