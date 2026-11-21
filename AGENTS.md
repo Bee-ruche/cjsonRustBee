@@ -22,7 +22,7 @@ Read `port/LEAVES.md` (what the leaf is given and what it answers; what its file
 Check your leaf **in the sandbox only**, from the root of the clone (it builds and runs project code). The sandbox is an image with the judge's own compilers (rustc 1.75, edition 2021: use nothing newer); the clone is mounted read-only, and the check writes in the container's own `/tmp` and nowhere else:
 
 ```bash
-docker build -t bee-cjson bee/sandbox    # with network: the image holds a system and its compilers, nothing of the project
+docker build -t bee-cjson bee/sandbox    # with network: the image holds a system and its compilers, nothing of the project; a worker builds it only right after `hive start` printed `STARTED`, before any project code ran since; anyone else, from a fresh clone
 docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges --user 65534:65534 \
   --tmpfs /tmp:rw,exec,size=512m -e HOME=/tmp \
   --mount type=bind,source="$PWD",target=/work,readonly -w /work bee-cjson sh bee/check.sh <leaf>

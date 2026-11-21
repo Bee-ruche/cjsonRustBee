@@ -2,7 +2,7 @@
 # The same system and the same compilers as the hive's judge uses for this project (Bee-ruche/hive's
 # tools/judge/Dockerfile.base with rustc and lld): what builds here builds there.
 #
-#   docker build -t bee-cjson bee/sandbox        (with network; only while `git status --porcelain bee/sandbox` prints nothing)
+#   docker build -t bee-cjson bee/sandbox        (with network; a worker: only right after `hive start` printed `STARTED`, before any project code ran since; anyone else: from a fresh clone)
 #   then the `docker run` line of AGENTS.md: no network, no capability, the clone mounted, an unprivileged user.
 FROM mirror.gcr.io/library/ubuntu@sha256:24737cef17f4e22b1977df7d9a05e77c4e28b7da5b8911f8d8ccda136bf3573c
 
