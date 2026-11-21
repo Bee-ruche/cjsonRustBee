@@ -29,12 +29,11 @@ for.**
 
 ## What comes next
 
-The functions of their input alone (no allocation, no global state, no tree of items) are all units now. What
-comes next is the judge author's work, in this order:
-1. The pieces whose only allocation is their result (`parse_string` first): the port writes the result into room
-   the leaf's driver gives it.
-2. The tree of items (`parse_value`, `parse_array`, `parse_object`, and their printers), built in room the driver
-   gives, once the judge can check a tree.
+The functions of their input alone (no allocation, no global state, no tree of items) are all units now, and so
+are the two whose only allocation is their result (`parse_string`, `strdup`). What comes next is the judge author's
+work: the tree of items, given to the port and taken back from it in one byte form, with room counted in
+allocations, as the design of 21 November 2026 says (Bee-ruche/cjsonRustBee pull request 7): the printers first
+(`print_value`, `print_array`, `print_object`), then `parse_value`.
 
 The cutter names to the architect what it sees missing, and writes a task only for a unit listed above.
 
