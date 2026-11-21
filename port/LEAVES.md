@@ -82,15 +82,19 @@ the driver runs with the usual stack of 8 MB, so each such call must keep its ow
 For `parse_value`, the driver gives the original a root item, zeroed (not counted in the room), and a parse buffer:
 the content, its length, the offset given, the depth 0, and an allocator. The allocator is the driver's: for each of
 the first `room` calls, it gives a zeroed block of the size asked, and from the next call on it fails (returns
-`NULL`). So the room counts allocations, not bytes. The original asks for a block at these points and no others:
-each time it begins a child of an array or an object (at the first child, and after each comma), the child's item
-(`cJSON_New_Item`), before it reads anything of the child, an object's child's name included; for each string, a name
-as much as a value, a block once its closing quote is found, before its escapes are decoded (a string with a bad
-escape has taken its block); for each value that begins with `-` or a digit, `parse_number`'s copy of the bytes it
-copies for `strtod`, before `strtod` reads them, even when `strtod` then reads nothing (freed at once). It fails
-where an allocation fails, and on an array or an object entered at the depth `CJSON_NESTING_LIMIT` (1000; the root is
-entered at depth 0); when it
-fails, it frees what it built, and the answer is its success byte and its offset only. When it succeeds, the answer
+`NULL`). So the room counts allocations, not bytes. The original asks for a block at these points and no others.
+For each child of an array or an object, the child's item (`cJSON_New_Item`), before it reads anything of the child
+(an object's child's name included): after the opening bracket, once blanks are skipped, unless nothing at all
+follows the bracket or the closing bracket comes first, so also when only blanks follow to the end of the content
+(`buffer_skip_whitespace` steps back onto the last blank), the parse then failing; and after each comma, whatever
+follows, nothing included. When that block is refused, the offset is left on the comma, or, for the first child, one
+byte before where the skipping of blanks after the bracket stopped. For each string, a name as much as a value, a
+block once its closing quote is found, before its escapes are decoded (a string with a bad escape has taken its
+block). For each value that begins with `-` or a digit, `parse_number`'s copy of the bytes it copies for `strtod`,
+before `strtod` reads them, even when `strtod` then reads nothing (freed at once). It fails where an allocation
+fails, and on an array or an object entered at the depth `CJSON_NESTING_LIMIT` (1000; the root is entered at depth
+0), whose item its parent has asked for already; when it fails, it frees what it built, and the answer is its success
+byte and its offset only. When it succeeds, the answer
 then holds the root in the tree's form, as the original left it: the root is not named, the children of an object
 are, with the names it parsed. A text is answered as the C string it is: its bytes up to its first zero byte (a
 `\u0000` ends it). The form holds no more of an item than the fields above: not the `valueint` 1 a `true` is given,
@@ -100,6 +104,15 @@ not the `prev` links.
 is built alone (`port/src/lib.rs`), so this one is the whole printer: its file holds all the code it runs. It may
 copy what it needs of the accepted leaves `print_number` and `print_string` (their files under `port/src/` on the
 branch `hive`); it cannot call them.
+
+`parse_value`, `parse_array` and `parse_object` call one another, and `parse_string`, `parse_number` and
+`buffer_skip_whitespace`; this leaf too is built alone, so it is the whole parser: its file holds all the code it
+runs. It may copy what it needs of the accepted leaves `parse_number`, `parse_string`, `buffer_skip_whitespace`,
+`utf16` and `hex4` (their files on the branch `hive`); it cannot call them. Their bounds are not this unit's: here a
+number runs to thousands of digits (`parse_number` copies every byte it takes, up to the whole content), so a copied
+`parse_number` with a fixed capacity will not do. The driver calls `parse_value` itself, at the offset given: nothing
+skips blanks or the UTF-8 mark (`EF BB BF`) before the value, and nothing asks for the end of the text after it, as
+`cJSON_ParseWithLengthOpts` would.
 
 ## The leaves of numbers
 
