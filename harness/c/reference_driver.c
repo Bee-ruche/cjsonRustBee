@@ -301,6 +301,124 @@ static int leaf_strdup(const unsigned char *in, size_t n, unsigned char *out, si
     return 0;
 }
 
+/* The tree of items (port/LEAVES.md): an item is its type byte, then what that type holds (a Number its double and
+   its int; a String or a Raw its valuestring; an Array or an Object the count of its children, then each child, an
+   object's child with its name right after its type byte); a text is its length, two bytes, low byte first (FF FF:
+   NULL), then its bytes. The decoder builds the C tree with every field the form holds set as given and every other
+   zero, the children linked as the original links them (child, next, prev; the first child's prev is the last). It
+   refuses a form cut short and a text with a zero byte: a C string cannot hold one. */
+typedef struct { const unsigned char *at, *end; } reader;
+
+static int read_text(reader *r, char **text)
+{
+    size_t length;
+    if (r->end - r->at < 2)
+        return 1;
+    length = offset_at(r->at);
+    r->at += 2;
+    if (length == 0xFFFF)
+        return 0;
+    if ((size_t)(r->end - r->at) < length || memchr(r->at, 0, length))
+        return 1;
+    *text = malloc(length + 1);
+    if (!*text)
+        exit(3);
+    memcpy(*text, r->at, length);
+    (*text)[length] = '\0';
+    r->at += length;
+    return 0;
+}
+
+/* One item and all it holds; 1 when the form is refused. Whatever it built is in *made, linked, for cJSON_Delete. */
+static int read_item(reader *r, int named, cJSON **made)
+{
+    cJSON *item, *last = NULL;
+    size_t count, i;
+    unsigned valueint;
+    if (r->at == r->end)
+        return 1;
+    item = calloc(1, sizeof *item);
+    if (!item)
+        exit(3);
+    *made = item;
+    item->type = *r->at++;
+    if (named && read_text(r, &item->string))
+        return 1;
+    switch (item->type) {
+    case cJSON_Number:
+        if (r->end - r->at < 12)
+            return 1;
+        item->valuedouble = double_at(r->at);
+        valueint = r->at[8] | r->at[9] << 8 | r->at[10] << 16 | (unsigned)r->at[11] << 24;
+        item->valueint = valueint <= INT_MAX ? (int)valueint : -(int)~valueint - 1;
+        r->at += 12;
+        return 0;
+    case cJSON_String:
+    case cJSON_Raw:
+        return read_text(r, &item->valuestring);
+    case cJSON_Array:
+    case cJSON_Object:
+        if (r->end - r->at < 2)
+            return 1;
+        count = offset_at(r->at);
+        r->at += 2;
+        for (i = 0; i < count; i++) {
+            cJSON *child = NULL;
+            int refused = read_item(r, item->type == cJSON_Object, &child);
+            if (child) {
+                if (last)
+                    last->next = child, child->prev = last;
+                else
+                    item->child = child;
+                last = child;
+                item->child->prev = last;
+            }
+            if (refused)
+                return 1;
+        }
+        return 0;
+    default:
+        return 0;
+    }
+}
+
+/* The printer: the tree given, printed by cJSON_PrintPreallocated into a buffer of exactly the length given (two
+   bytes, low byte first: a write past it is seen by the sanitizer), the format the byte given (any cJSON_bool). The
+   answer is the text without its zero, or a refusal where the original fails. The length is at most the answer's
+   buffer, `cap`: the text and its zero fit in that length, so the answer fits. */
+static int leaf_print_value(const unsigned char *in, size_t n, unsigned char *out, size_t cap, size_t *len)
+{
+    reader r;
+    cJSON *root = NULL;
+    char *buffer;
+    size_t length;
+    cJSON_bool printed;
+    if (n < 3 || offset_at(in) > cap)
+        return 1; /* no length or no format; or a length the answer's buffer could not hold */
+    length = offset_at(in);
+    r.at = in + 3;
+    r.end = in + n;
+    if (read_item(&r, 0, &root) || r.at != r.end) {
+        cJSON_Delete(root);
+        return 1; /* the item cut short, a text with a zero byte, or bytes after the item */
+    }
+    buffer = calloc(length ? length : 1, 1);
+    if (!buffer)
+        exit(3);
+    printed = cJSON_PrintPreallocated(root, buffer, (int)length, (cJSON_bool)in[2]);
+    cJSON_Delete(root);
+    if (!printed) {
+        free(buffer);
+        return 1; /* the original fails */
+    }
+    *len = strnlen(buffer, length);
+    if (*len >= length)
+        exit(4); /* never: the original ends its text with a zero, within the length */
+    memcpy(out, buffer, *len);
+    free(buffer);
+    return 0;
+}
+
 static unsigned long u32_at(const unsigned char *p) { return p[0] | (p[1] << 8) | (p[2] << 16) | ((unsigned long)p[3] << 24); }
 
 static void put_u32(FILE *f, unsigned long v)
@@ -316,7 +434,7 @@ int main(int argc, char **argv)
         {"hex4", leaf_hex4}, {"utf16", leaf_utf16}, {"minify", leaf_minify}, {"print_string", leaf_print_string}, {"strcasecmp", leaf_strcasecmp},
         {"parse_number", leaf_parse_number}, {"compare_double", leaf_compare_double}, {"print_number", leaf_print_number},
         {"buffer_skip_whitespace", leaf_buffer_skip_whitespace}, {"skip_utf8_bom", leaf_skip_utf8_bom}, {"update_offset", leaf_update_offset},
-        {"parse_string", leaf_parse_string}, {"strdup", leaf_strdup}};
+        {"parse_string", leaf_parse_string}, {"strdup", leaf_strdup}, {"print_value", leaf_print_value}};
     leaf_function leaf = NULL;
     FILE *in, *out;
     unsigned char *cases;

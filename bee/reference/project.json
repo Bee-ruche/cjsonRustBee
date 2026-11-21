@@ -166,6 +166,18 @@
       "case_bytes": 256,
       "answer_bytes": 1552,
       "refuses": true
+    },
+    "print_value": {
+      "files": [
+        "port/src/print_value.rs"
+      ],
+      "blank": [
+        "port/blank.rs"
+      ],
+      "cases": 3000,
+      "case_bytes": 3072,
+      "answer_bytes": 18448,
+      "refuses": true
     }
   },
   "variants": 3,

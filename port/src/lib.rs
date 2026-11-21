@@ -77,3 +77,8 @@ pub const ANSWER: Leaf = parse_string::answer;
 pub mod strdup;
 #[cfg(unit = "strdup")]
 pub const ANSWER: Leaf = strdup::answer;
+
+#[cfg(unit = "print_value")]
+pub mod print_value;
+#[cfg(unit = "print_value")]
+pub const ANSWER: Leaf = print_value::answer;
