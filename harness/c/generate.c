@@ -1,18 +1,21 @@
 /* The generator of cases: « generate <leaf> <count> [cases] », the seed (hexadecimal) on its input; writes /cases/cases
    (the judge's framing: « <u32 length><bytes> »…). For each leaf:
    - FIXED cases, at every draw: every constant the original compares with, and its neighbours (the bounds of a
-     UTF-8 length, of the surrogates, of a digit, of an int, of the doubles, of a byte skipped, of a buffer's end); the longest input the manifest allows (LONGEST below is the
-     manifest's largest « case_bytes », and each leaf's own bound is the one its unit has there); the empty input;
+     UTF-8 length, of the surrogates, of a digit, of an int, of the doubles, of a byte skipped, of a buffer's end,
+     of the nesting); the longest input the manifest allows (LONGEST below is the manifest's largest « case_bytes »,
+     and each leaf's own bound is the one its unit has there); the empty input;
    - DRAWN cases, from what the leaf's inputs are made of: every byte value, every length up to the leaf's bound,
      the hard paths on purpose (escapes, surrogate pairs whole and broken, texts cut short, comments left open,
-     control characters, zero bytes where a leaf refuses them), and the longest answers on purpose too (a text kept
+     control characters, zero bytes where a leaf refuses them, trees of every kind of item, nested deep, with a
+     buffer around the least length the printer takes), and the longest answers on purpose too (a text kept
      whole, a text whose every byte is written as six, two texts of unequal lengths up to the bound).
    The order is drawn too. A wrong leaf that is accepted names a path these cases do not reach: add the case here. */
+#include <float.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-enum { LONGEST = 256 };
+enum { LONGEST = 3072, SHORT = 256 };   /* (SHORT: the bound of the leaves of buffers and of those that allocate, which drew their lengths from LONGEST when it was 256) */
 
 static unsigned long long state[2];
 
@@ -523,8 +526,8 @@ static int stopping_byte(void)                                       /* a byte i
 
 static void buffer_skip_whitespace_case(text *t)
 {
-    unsigned char content[LONGEST - 2];
-    size_t n = below(4) ? below(LONGEST - 1) : below(9), i = 0;      /* (the leaf's bound: 256 bytes, the offset's two included) */
+    unsigned char content[SHORT - 2];
+    size_t n = below(4) ? below(SHORT - 1) : below(9), i = 0;        /* (the leaf's bound: 256 bytes, the offset's two included) */
     while (i < n) {                                                  /* runs of bytes skipped and of bytes kept, short and long */
         size_t run = below(4) ? 1 + below(4) : 1 + below(n);
         int skipped = (int)below(2);
@@ -577,8 +580,8 @@ static void skip_utf8_bom_case(text *t)
 
 static void update_offset_case(text *t)
 {
-    unsigned char content[LONGEST - 2];
-    size_t n = below(4) ? below(LONGEST - 1) : below(9), zeros, i, offset;
+    unsigned char content[SHORT - 2];
+    size_t n = below(4) ? below(SHORT - 1) : below(9), zeros, i, offset;
     for (i = 0; i < n; i++)
         content[i] = (unsigned char)(below(4) ? 1 + (int)below(255) : (unsigned char)"a \x7f\x80\xff"[below(5)]);
     switch (below(5)) {                                              /* zero bytes: none (refused), one, a few, many */
@@ -670,7 +673,7 @@ static void string_body(text *t, size_t most)                        /* what lie
 static void parse_string_case(text *t)
 {
     text c;
-    size_t prefix = below(4) ? 0 : 1 + below(3), most = below(4) ? 2 + below(LONGEST - 6) : 2 + below(24), offset, i;
+    size_t prefix = below(4) ? 0 : 1 + below(3), most = below(4) ? 2 + below(SHORT - 6) : 2 + below(24), offset, i;
     memset(&c, 0, sizeof c);
     for (i = 0; i < prefix; i++)                                     /* what lies before the offset */
         put(&c, " a\"\\"[below(4)]);
@@ -684,8 +687,8 @@ static void parse_string_case(text *t)
     if (below(4) == 0)                                               /* something after the string */
         for (i = 1 + below(4); i > 0; i--)
             put(&c, below(2) ? '"' : 'z');
-    if (c.length > LONGEST - 4)
-        c.length = LONGEST - 4;                                      /* (the leaf's bound: 256 bytes, room and offset included) */
+    if (c.length > SHORT - 4)
+        c.length = SHORT - 4;                                        /* (the leaf's bound: 256 bytes, room and offset included) */
     switch (below(12)) {
     case 0: offset = below(c.length + 1); break;                     /* anywhere (at the end: refused) */
     case 1: offset = c.length + below(3); break;                     /* at the end or beyond: refused */
@@ -702,7 +705,7 @@ static void parse_string_case(text *t)
 
 static void strdup_case(text *t)
 {
-    size_t n = below(4) ? below(LONGEST - 1) : below(9), i;          /* (the leaf's bound: 256 bytes, the room's two included) */
+    size_t n = below(4) ? below(SHORT - 1) : below(9), i;            /* (the leaf's bound: 256 bytes, the room's two included) */
     put_offset(t, some_room(n + 1));                                 /* (the size it asks: the text and its zero) */
     for (i = 0; i < n; i++)
         put(t, below(4) ? 'a' + (int)below(26) : 1 + (int)below(255));
@@ -710,6 +713,295 @@ static void strdup_case(text *t)
         t->bytes[2 + below(n)] = 0;                                  /* a zero byte: refused */
     if (below(60) == 0)
         t->length = below(2);                                        /* no room: refused */
+}
+
+/* The tree of items (port/LEAVES.md): an item in preorder, its type byte, then what that type holds; a text, its length
+   (two bytes, low byte first; FF FF: NULL), then its bytes. The generator draws a tree and, beside it, the length of the
+   text the original prints for it, or -1 where the original cannot print it (a type that is none of the seven, a Raw
+   without its text, arrays and objects nested CJSON_NESTING_LIMIT deep), so that the length of the buffer is drawn
+   where the original's answer changes: the text, its zero, and the one byte more ensure asks for. (Only the cases are
+   drawn from that length: the answers are the reference's.) */
+enum { NOT_A_TEXT = 0xFFFF, NESTING = 1000 };
+
+static void put_two(text *t, size_t value)
+{
+    put(t, (int)(value & 255));
+    put(t, (int)(value >> 8 & 255));
+}
+
+static void set_two(text *t, size_t at, size_t value)
+{
+    if (at + 1 < t->length)
+        t->bytes[at] = (unsigned char)(value & 255), t->bytes[at + 1] = (unsigned char)(value >> 8 & 255);
+}
+
+static double magnitude(double d) { return d < 0 ? -d : d; }
+
+/* the length print_number writes: « null » for NaN and the infinities; the int when the double equals it; else 15
+   digits when they give back a double compare_double says is equal, else 17 */
+static long printed_number(double d, int valueint)
+{
+    char s[40];
+    double test = 0;
+    int length;
+    if (d != d || d - d != d - d)
+        return 4;
+    if (d == (double)valueint)
+        return snprintf(s, sizeof s, "%d", valueint);
+    length = snprintf(s, sizeof s, "%1.15g", d);
+    if (sscanf(s, "%lg", &test) == 1
+        && magnitude(test - d) <= (magnitude(test) > magnitude(d) ? magnitude(test) : magnitude(d)) * DBL_EPSILON)
+        return length;
+    return snprintf(s, sizeof s, "%1.17g", d);
+}
+
+/* what print_string_ptr writes for one byte: two for the seven it escapes by a letter, six for the other controls */
+static long printed_byte(int byte)
+{
+    return byte && strchr("\"\\\b\f\n\r\t", byte) ? 2 : byte < 32 ? 6 : 1;
+}
+
+static int chaining;                                                 /* a tree drawn as a chain: one child, nested deep */
+
+/* a text of at most `most` bytes: plain bytes, bytes escaped by a letter, controls, high bytes; a zero byte once in a
+   while (refused: a C string cannot hold one). Returns the length the original prints for it: as a string, quotes and
+   escapes included; as a Raw, its bytes as they are. NULL now and then when `null_too`: printed « "" » as a string, a
+   failure as a Raw (the caller's) */
+static long tree_text(text *t, size_t most, int null_too, int raw)
+{
+    size_t at = t->length, n, i;
+    long printed = raw ? 0 : 2;
+    if (null_too && below(raw ? 40 : 10) == 0) {
+        put_two(t, NOT_A_TEXT);
+        return raw ? -1 : 2;
+    }
+    n = below(3) ? below(9) : below(most + 1);
+    if (n > most)
+        n = most;
+    put_two(t, 0);
+    for (i = 0; i < n; i++) {
+        int byte;
+        switch (below(10)) {
+        case 0: byte = "\"\\\b\f\n\r\t/"[below(8)]; break;
+        case 1: byte = 1 + (int)below(31); break;
+        case 2: byte = 128 + (int)below(128); break;
+        default: byte = plain_byte(); break;
+        }
+        if (below(2000) == 0)
+            byte = 0;
+        put(t, byte);
+        printed += raw ? 1 : printed_byte(byte);
+    }
+    set_two(t, at, t->length - at - 2);
+    return printed;
+}
+
+static long tree_item(text *t, size_t depth, int format, int named, size_t most);
+
+/* an array's or an object's children, at most `most` bytes; `depth` is the container's (the printbuffer's depth when
+   print_array or print_object is called). Returns the length the original prints for the container, or -1 */
+static long tree_children(text *t, size_t depth, int format, int object, size_t most)
+{
+    size_t at = t->length, start, count = 0, wanted, inner = depth + 1;
+    long printed = object && format ? 2 : 1, each;
+    int failed = depth >= NESTING;
+    wanted = chaining ? (below(8) ? 1 : 2) : below(3) ? below(4) : below(4) ? below(12) : below(48);
+    put_two(t, 0);
+    start = t->length;
+    while (count < wanted && t->length - start < most) {
+        size_t left = most - (t->length - start), share = count + 1 == wanted || chaining ? left : 1 + below(left);
+        if (share < (object ? 3u : 1u))
+            break;
+        each = tree_item(t, inner, format, object, share);
+        if (each < 0)
+            failed = 1;
+        else if (object)
+            printed += (format ? (long)inner : 0) + each + (format ? 2 : 1) + (format ? 1 : 0);
+        else
+            printed += each + (count ? (format ? 2 : 1) : 0);
+        count++;
+    }
+    set_two(t, at, count);
+    if (object)
+        printed += (count ? (long)count - 1 : 0) + (format ? (long)inner - 1 : 0) + 1;
+    else
+        printed += 1;
+    return failed ? -1 : printed;
+}
+
+/* one item, its name first when `named` (an object's child), at most about `most` bytes (at least one, three when named);
+   returns the length the original prints for it, its name included, or -1 */
+static long tree_item(text *t, size_t depth, int format, int named, size_t most)
+{
+    static const int OTHER[] = {0, 3, 5, 6, 12, 48, 96, 129, 255};
+    size_t begin = t->length, pick = below(100), left, need;
+    long name = 0, value;
+    int type;
+    if (chaining && most > 8)
+        pick = below(2) ? 60 : 80;
+    type = pick < 6 ? 1 : pick < 12 ? 2 : pick < 18 ? 4 : pick < 36 ? 8 : pick < 54 ? 16 : pick < 59 ? 128 : pick < 79 ? 32
+         : pick < 99 ? 64 : below(2) ? OTHER[below(sizeof OTHER / sizeof *OTHER)] : (int)below(256);
+    need = type == 8 ? 12 : type == 16 || type == 128 || type == 32 || type == 64 ? 2 : 0;
+    if (1 + (named ? 2 : 0) + need > most)
+        type = 1 << below(3), need = 0;                             /* no room for more: false, true or null */
+    put(t, type);
+    if (named) {
+        size_t longest = below(4) ? 6 : 24;                          /* a name, within what the value leaves */
+        name = tree_text(t, longest < most - 3 - need ? longest : most - 3 - need, 1, 0);
+    }
+    left = most > t->length - begin ? most - (t->length - begin) : 0;
+    switch (type) {
+    case 1: return name + 5;
+    case 2: case 4: return name + 4;
+    case 8: {
+        unsigned long long bits = some_double();
+        double d = double_of(bits);
+        int valueint;
+        switch (below(6)) {
+        case 0: valueint = (int)(unsigned)next(); break;             /* any int */
+        case 1: valueint = 0; break;
+        default:                                                     /* the one cJSON_SetNumberHelper sets beside the double */
+            valueint = d != d ? 0 : d >= 2147483647.0 ? 2147483647 : d <= -2147483648.0 ? -2147483647 - 1 : (int)d;
+            break;
+        }
+        put_bits(t, bits);
+        put_int(t, (unsigned)valueint);
+        return name + printed_number(d, valueint);
+    }
+    case 16: case 128:
+        value = left >= 2 ? tree_text(t, left - 2, 1, type == 128) : (put_two(t, NOT_A_TEXT), type == 128 ? -1 : 2);
+        return value < 0 ? -1 : name + value;
+    case 32: case 64:
+        if (left < 2) {
+            put_two(t, 0);
+            return -1;                                               /* (never: the type was chosen for the room) */
+        }
+        value = tree_children(t, depth, format, type == 64, left - 2);
+        return value < 0 ? -1 : name + value;
+    default:
+        return -1;
+    }
+}
+
+static void print_value_case(text *t)
+{
+    static text tree;
+    size_t most, n, cap, room, least;
+    long printed;
+    int format = (int)below(2);
+    tree.length = 0;
+    chaining = below(12) == 0;
+    most = below(4) ? 1 + below(96) : below(4) ? 1 + below(600) : 1 + below(LONGEST - 3);   /* (the leaf's bound: 3072 bytes, the length and the format included) */
+    printed = tree_item(&tree, 0, format, 0, most);
+    chaining = 0;
+    if (format && below(8) == 0)
+        format = 2 + (int)below(254);                                /* any byte but 0: formatted too */
+    n = 3 + tree.length, cap = 6 * n + 16;
+    if (printed < 0)
+        room = below(3) ? cap : below(cap + 1);
+    else {
+        least = (size_t)printed + 2;                                 /* the text, its zero, and the byte more ensure asks for */
+        switch (below(12)) {
+        case 0: case 1: case 2: room = least; break;
+        case 3: case 4: room = least - 1; break;
+        case 5: room = least + 1 + below(2); break;
+        case 6: room = below(least); break;
+        case 7: room = 0; break;
+        case 8: room = cap; break;
+        case 9: room = cap + 1 + below(16); break;                   /* more than the answer's buffer: refused */
+        default: room = least + below(64); break;
+        }
+    }
+    put_two(t, room > 65535 ? 65535 : room);
+    put(t, format);
+    for (n = 0; n < tree.length; n++)
+        put(t, tree.bytes[n]);
+    switch (below(40)) {
+    case 0: t->length = 3 + below(tree.length); break;               /* the item cut short: refused */
+    case 1: put(t, (int)below(256)); break;                          /* a byte after it: refused */
+    case 2: if (tree.length) t->bytes[3 + below(tree.length)] = (unsigned char)below(256); break;   /* a byte changed: anything */
+    default: break;
+    }
+}
+
+/* a fixed tree, written short: n f t (null, false, true), i (the number 7, its int 7), d (0.1, its int 0), s ("ab"), S (a
+   String whose valuestring is NULL), E (""), c ("\x01\t\"/": a byte escaped by six, two by a letter, one as it is), r (the
+   Raw « [1] »), z (the Raw ""), R (a Raw whose valuestring is NULL), x and y (the types 0 and 3: none), [ … ] an array,
+   { … } an object, each of its children a name then an item; the names: k ("k"), K (NULL), e (""), q ("a\"b"). Puts its
+   form; returns the length the original prints for it, or -1 */
+static long fixed_tree(text *t, const char **p, size_t depth, int format, int named)
+{
+    static const char *types = "nftidsSEcrzRxy[{", *bytes = "\004\001\002\010\010\020\020\020\020\200\200\200\000\003\040\100";
+    const char *texts[] = {"ab", "", "\001\t\"/", "[1]", "", "k", "", "a\"b"}, *order = "sEcrz";
+    char name = named ? *(*p)++ : 0, kind = *(*p)++;
+    long printed = 0, each;
+    size_t at, count = 0, inner = depth + 1, i;
+    int failed = depth >= NESTING;
+    put(t, (unsigned char)bytes[strchr(types, kind) - types]);
+    if (name) {
+        const char *s = name == 'k' ? texts[5] : name == 'e' ? texts[6] : texts[7];
+        if (name == 'K')
+            put_two(t, NOT_A_TEXT), printed = 2;
+        else {
+            put_two(t, strlen(s));
+            for (printed = 2, i = 0; s[i]; i++)
+                put(t, s[i]), printed += printed_byte(s[i]);
+        }
+    }
+    switch (kind) {
+    case 'n': case 't': return printed + 4;
+    case 'f': return printed + 5;
+    case 'i': put_bits(t, bits_of(7)); put_int(t, 7); return printed + 1;
+    case 'd': put_bits(t, bits_of(0.1)); put_int(t, 0); return printed + 3;
+    case 'S': put_two(t, NOT_A_TEXT); return printed + 2;
+    case 'R': put_two(t, NOT_A_TEXT); return -1;
+    case 'x': case 'y': return -1;
+    case 's': case 'E': case 'c': case 'r': case 'z': {
+        const char *s = texts[strchr(order, kind) - order];
+        put_two(t, strlen(s));
+        printed += kind == 'r' || kind == 'z' ? 0 : 2;
+        for (i = 0; s[i]; i++)
+            put(t, s[i]), printed += kind == 'r' || kind == 'z' ? 1 : printed_byte(s[i]);
+        return printed;
+    }
+    default:                                                         /* [ or { */
+        at = t->length;
+        put_two(t, 0);
+        printed += kind == '{' && format ? 2 : 1;
+        while (**p != ']' && **p != '}') {
+            each = fixed_tree(t, p, inner, format, kind == '{');
+            if (each < 0)
+                failed = 1;
+            else if (kind == '{')
+                printed += (format ? (long)inner : 0) + each + (format ? 2 : 1) + (format ? 1 : 0);
+            else
+                printed += each + (count ? (format ? 2 : 1) : 0);
+            count++;
+        }
+        (*p)++;
+        set_two(t, at, count);
+        printed += kind == '{' ? (count ? (long)count - 1 : 0) + (format ? (long)inner - 1 : 0) + 1 : 1;
+        return failed ? -1 : printed;
+    }
+}
+
+/* a case of print_value: its length (`delta` from the least the original takes, or `fixed` when not 0), its format, the
+   tree described; the least is the text, its zero, and the byte more ensure asks for */
+static void put_fixed_tree(text *t, const char *description, int format, long delta, size_t fixed)
+{
+    static text tree;
+    const char *p = description;
+    long printed;
+    size_t cap, n;
+    tree.length = 0;
+    printed = fixed_tree(&tree, &p, 0, format != 0, 0);
+    cap = 6 * (3 + tree.length) + 16;
+    if (!fixed)
+        fixed = printed < 0 ? cap : (size_t)(printed + 2 + delta);
+    put_two(t, fixed);
+    put(t, format);
+    for (n = 0; n < tree.length; n++)
+        put(t, tree.bytes[n]);
 }
 
 /* compare_double's fixed pairs, a then b, as patterns. The original says equal when |a - b| <= max(|a|, |b|)·DBL_EPSILON:
@@ -953,6 +1245,111 @@ static int special(text *t, const char *leaf, size_t number)
         if (number == 11) { put_offset(t, 3); puts_in(t, "abc"); return 1; }
         if (number == 12) { put_offset(t, 65535); for (i = 1; i < 255; i++) put(t, (int)i); return 1; }
         if (number == 13) { put_offset(t, 65535); put(t, 255); return 1; }
+    } else if (!strcmp(leaf, "print_value")) {
+        /* every type byte, with what that type holds (the seven; the others, none: the original fails), both formats; small
+           trees of every kind of item, both formats, the buffer's length from two below the least the original takes to one
+           above; format bytes other than 0 and 1; the nesting limit, at it and past it, by arrays and by an object; forms
+           refused; the longest inputs and the longest answer; numbers at their edges, alone */
+        static const char *trees[] = {
+            "n", "f", "t", "i", "d", "s", "S", "E", "c", "r", "z", "R", "x", "y", "[]", "{}", "[n]", "[nft]", "[is]", "{kn}",
+            "{knKt}", "{Ki}", "{e[]}", "{qc}", "{k{k{k[i]}}}", "[{kn}{Kf}]", "[z]", "[zi]", "[iz]", "{kz}", "[[[]]]", "{k{}}",
+            "[{}]", "{k[{kS}]}", "[[n][]]", "{k[]K{}}", "[rRn]", "[nx]", "{knKy}", "[[[[R]]]]"};
+        static const struct { size_t arrays; const char *inner; int format; long delta; } deep[] = {
+            {1000, "n", 0, 0}, {1000, "n", 0, -1}, {1000, "n", 1, 0}, {1001, "n", 0, 0}, {999, "{kn}", 0, 0}, {999, "{kn}", 1, 0},
+            {999, "{k[]}", 0, 0}, {1000, "{}", 0, 0}, {999, "{}", 1, 0}, {1001, "", 0, 0}, {1000, "", 0, 0}};
+        static char nested[2 * 1001 + 8];
+        size_t k = number, n;
+        if (k < 512) {
+            int type = (int)(k / 2);
+            put_two(t, 0), put(t, (int)(k % 2)), put(t, type);
+            switch (type) {
+            case 8: put_bits(t, bits_of(1.5)); put_int(t, 1); break;
+            case 16: case 128: put_two(t, 2); puts_in(t, "a\n"); break;
+            case 32: put_two(t, 2); put(t, 4); put(t, 1); break;
+            case 64: put_two(t, 2); put(t, 4); put_two(t, 1); put(t, 'k'); put(t, 2); put_two(t, NOT_A_TEXT); break;
+            default: break;
+            }
+            set_two(t, 0, 6 * t->length + 16);
+            return 1;
+        }
+        k -= 512;
+        if (k < 8 * (sizeof trees / sizeof *trees)) {
+            put_fixed_tree(t, trees[k / 8], (int)(k / 4 % 2), (long)(k % 4) - 2, 0);
+            return 1;
+        }
+        k -= 8 * (sizeof trees / sizeof *trees);
+        if (k < 3) {
+            static const int formats[] = {2, 255, 128};
+            put_fixed_tree(t, k < 2 ? "{k[n]}" : "[{kn}]", formats[k], k < 2 ? 0 : -1, 0);
+            return 1;
+        }
+        k -= 3;
+        if (k < sizeof deep / sizeof *deep) {
+            for (n = 0, number = 0; number < deep[k].arrays; number++)
+                nested[n++] = '[';
+            strcpy(nested + n, deep[k].inner), n += strlen(deep[k].inner);
+            for (number = 0; number < deep[k].arrays; number++)
+                nested[n++] = ']';
+            nested[n] = 0;
+            put_fixed_tree(t, nested, deep[k].format, deep[k].delta, 0);
+            return 1;
+        }
+        k -= sizeof deep / sizeof *deep;
+        switch (k) {                                                 /* refused, but for 12 */
+        case 0: return 1;
+        case 1: put(t, 64); return 1;
+        case 2: put_two(t, 64); return 1;
+        case 3: put_two(t, 64); put(t, 0); return 1;                 /* no item */
+        case 4: put_two(t, 64); put(t, 0); put(t, 32); put_two(t, 2); put(t, 4); return 1;   /* two children said, one given */
+        case 5: put_two(t, 64); put(t, 0); put(t, 4); put(t, 4); return 1;                   /* a byte after the item */
+        case 6: put_two(t, 64); put(t, 0); put(t, 16); put_two(t, 5); puts_in(t, "abc"); return 1;
+        case 7: put_two(t, 64); put(t, 0); put(t, 16); put_two(t, 3); put(t, 'a'); put(t, 0); put(t, 'b'); return 1;
+        case 8: put_two(t, 64); put(t, 1); put(t, 64); put_two(t, 1); put(t, 4); put_two(t, 2); put(t, 'k'); put(t, 0); return 1;
+        case 9: put_two(t, 64); put(t, 0); put(t, 128); put_two(t, 1); put(t, 0); return 1;
+        case 10: put_two(t, 64); put(t, 0); put(t, 8); put_bits(t, bits_of(1.5)); put(t, 1); put(t, 0); put(t, 0); return 1;
+        case 11: put_two(t, 41); put(t, 0); put(t, 4); return 1;                            /* a length past the answer's buffer */
+        case 12: put_two(t, 40); put(t, 0); put(t, 4); return 1;                            /* the largest length: « null » */
+        case 13: put_two(t, 0); put(t, 1); put(t, 4); return 1;                             /* no room at all: the original fails */
+        case 14: put_two(t, 64); put(t, 0); put(t, 16); return 1;
+        case 15: put_two(t, 64); put(t, 0); put(t, 64); put_two(t, 1); put(t, 4); return 1;   /* a child without its name */
+        default: break;
+        }
+        k -= 16;
+        if (k < 5) {
+            /* the longest inputs: an array of one string of 3063 bytes, plain or every byte written as six (the longest
+               answer), at the least length and one below; an array of 3066 « false », unformatted, and formatted (its text
+               longer than the answer's buffer: the original fails at every length allowed) */
+            static const unsigned char six[] = {1, 2, 3, 4, 5, 6, 7, 11, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31};
+            put_two(t, 0), put(t, k == 4), put(t, 32);
+            if (k < 3) {
+                put_two(t, 1), put(t, 16), put_two(t, 3063);
+                for (n = 0; n < 3063; n++)
+                    put(t, k ? six[n % sizeof six] : 'a' + (int)(n % 26));
+                set_two(t, 0, (k ? 6 * 3063 : 3063) + 4 + 2 - (k == 2));
+            } else {
+                put_two(t, 3066);
+                for (n = 0; n < 3066; n++)
+                    put(t, 1);
+                set_two(t, 0, k == 3 ? 1 + 5 * 3066 + 3065 + 1 + 2 : 6 * t->length + 16);
+            }
+            return 1;
+        }
+        k -= 5;
+        if (k < 80) {
+            double d;
+            int valueint = 0;
+            if (k < 25)
+                d = FIXED_PRINT_NUMBER[k].value, valueint = FIXED_PRINT_NUMBER[k].valueint;
+            else if (k < 44)
+                d = double_of(EDGE_BITS[k - 25]);
+            else {
+                d = EDGE_VALUES[k - 44];
+                valueint = d >= 2147483647.0 ? 2147483647 : d <= -2147483648.0 ? -2147483647 - 1 : (int)d;
+            }
+            put_two(t, (size_t)printed_number(d, valueint) + 2), put(t, 0), put(t, 8);
+            put_bits(t, bits_of(d)), put_int(t, (unsigned)valueint);
+            return 1;
+        }
     } else {
         /* two texts of 31 bytes: equal but for their case (0); then differing at their last byte only, both ways;
            then one a prefix of the other; then the shapes that are refused */
@@ -1051,6 +1448,7 @@ int main(int argc, char **argv)
     else if (!strcmp(argv[1], "update_offset")) draw = update_offset_case, bound = 256;
     else if (!strcmp(argv[1], "parse_string")) draw = parse_string_case, bound = 256;
     else if (!strcmp(argv[1], "strdup")) draw = strdup_case, bound = 256;
+    else if (!strcmp(argv[1], "print_value")) draw = print_value_case, bound = 3072;
     else return 2;
     if (!fgets(seed, sizeof seed, stdin) || strlen(seed) < 32)
         return 2;

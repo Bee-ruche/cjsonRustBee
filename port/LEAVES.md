@@ -19,6 +19,7 @@ and the answer are. « Refused » means `Err(())`.
 | `update_offset` | `update_offset` | a print buffer (below): its offset, then its content; refused unless a zero byte lies at or after the offset (fewer than two bytes: refused) | two bytes: the offset the original leaves, low byte first |
 | `parse_string` | `parse_string` | two bytes, the room (below), then a buffer (below): its offset, then its content; refused unless a byte lies at the offset (the original reads it without a check) (fewer than four bytes: refused) | one byte, 1 when the original succeeds and 0 when it fails; then the offset it leaves (two bytes, low byte first; it moves the offset when it fails too); then, when it succeeds, the block it asked for, as it leaves it (below) |
 | `strdup` | `cJSON_strdup` | two bytes, the room (below), then a text without a zero byte (with one: refused) (fewer than two bytes: refused) | the block it asked for, as it leaves it (below): the copy, its zero included; refused when the original fails (it returns `NULL`) |
+| `print_value` | `print_value`, as `cJSON_PrintPreallocated` calls it, with all it calls (`print_array`, `print_object`, `print_number`, `print_string_ptr`) | two bytes, low byte first, the length of the buffer the original prints into (the tree of items, below), then one byte, `format`, then one item in the tree's form (below); refused when that length is more than `6 × (input length) + 16` (the whole input's length, these three bytes included), when the item is cut short or bytes follow it, or when a text in it holds a zero byte (fewer than three bytes: refused) | the text the original prints, without its zero; refused when the original fails (it returns false) |
 
 ## The leaves that allocate their result
 
@@ -42,6 +43,42 @@ Any offset may be given, at the end of the content or beyond it too, and the ans
 but in two cases, where the leaf refuses: `update_offset` is not called where no zero byte lies at or after the offset
 (the original would read past the buffer's end), and `parse_string` where no byte lies at the offset (the original
 reads it without a check).
+
+## The tree of items
+
+A tree of `cJSON` items is given in one byte form: an item, then its children inside it, in order (preorder). An
+item is its `type`, one byte (the field's low byte: `print_value` reads no more of it), then what that type holds:
+
+- `cJSON_Number` (8): its `valuedouble` (a double, below), then its `valueint` (four bytes, low byte first, as a
+  32-bit two's complement): the twelve bytes `print_number` is given;
+- `cJSON_String` (16) and `cJSON_Raw` (128): its `valuestring`, a text;
+- `cJSON_Array` (32) and `cJSON_Object` (64): the count of its children (two bytes, low byte first), then each
+  child (`child`, then each `next`); a child of an object (its parent's type byte is 64) holds its name
+  (`string`, a text) right after its type byte, before what its type holds;
+- any other byte, `cJSON_False` (1), `cJSON_True` (2) and `cJSON_NULL` (4) as well as the bytes that are no type
+  (0, 3, 255…): nothing more.
+
+A text is its length (two bytes, low byte first), then its bytes. The length 65535 (`FF FF`) stands for `NULL`, and
+no byte follows it. A field the form does not hold is zero, or `NULL`: the printers do not read it. Only the
+children of an object are named: not the item given, not the children of an array. So `{"a": [true]}` is
+`40 01 00`, `20 01 00 61 01 00`, `02`: the object (64, one child); its child, an array (32), named `a` (one byte,
+`61`), with one child; that child, `true` (2), not named.
+
+For `print_value`, the driver builds that tree and calls `cJSON_PrintPreallocated(item, buffer, length, format)`
+with a buffer of exactly the length given (it does not allocate: its print buffer is `noalloc`), and `format` the
+byte given (0: unformatted; any other value: formatted, as the original takes any `cJSON_bool` that is not 0). So the
+original fails where `ensure` finds the buffer too short for what it is asked (as `ensure` counts: the bytes asked,
+the offset, and one more, at most the length), and where it cannot print an item: a type that is none of the seven,
+a Raw whose `valuestring` is `NULL`, an array or an object entered at the depth `CJSON_NESTING_LIMIT` (1000, the
+value `reference/cJSON.h` gives it: the reference does not change it; the item given is entered at depth 0). The
+length given is at most the buffer the leaf answers in (the section « The buffer », below): every text the original
+prints in it fits there. Every failure is a refusal, of the form or of the original: a leaf may read the form as it
+prints.
+
+`print_value`, `print_array` and `print_object` call one another, and `print_number` and `print_string_ptr`; a leaf
+is built alone (`port/src/lib.rs`), so this one is the whole printer: its file holds all the code it runs. It may
+copy what it needs of the accepted leaves `print_number` and `print_string` (their files under `port/src/` on the
+branch `hive`); it cannot call them.
 
 ## The leaves of numbers
 
