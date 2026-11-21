@@ -82,10 +82,14 @@ the driver runs with the usual stack of 8 MB, so each such call must keep its ow
 For `parse_value`, the driver gives the original a root item, zeroed (not counted in the room), and a parse buffer:
 the content, its length, the offset given, the depth 0, and an allocator. The allocator is the driver's: for each of
 the first `room` calls, it gives a zeroed block of the size asked, and from the next call on it fails (returns
-`NULL`). So the room counts allocations, not bytes. The original asks for one block for each item it adds to an array
-or an object (`cJSON_New_Item`), one for each string it parses, a name as much as a value (`parse_string`'s), and one
-for each number it parses (`parse_number`'s copy of its text, freed at once). It fails where an allocation fails, and
-on an array or an object entered at the depth `CJSON_NESTING_LIMIT` (1000; the root is entered at depth 0); when it
+`NULL`). So the room counts allocations, not bytes. The original asks for a block at these points and no others:
+each time it begins a child of an array or an object (at the first child, and after each comma), the child's item
+(`cJSON_New_Item`), before it reads anything of the child, an object's child's name included; for each string, a name
+as much as a value, a block once its closing quote is found, before its escapes are decoded (a string with a bad
+escape has taken its block); for each value that begins with `-` or a digit, `parse_number`'s copy of the bytes it
+copies for `strtod`, before `strtod` reads them, even when `strtod` then reads nothing (freed at once). It fails
+where an allocation fails, and on an array or an object entered at the depth `CJSON_NESTING_LIMIT` (1000; the root is
+entered at depth 0); when it
 fails, it frees what it built, and the answer is its success byte and its offset only. When it succeeds, the answer
 then holds the root in the tree's form, as the original left it: the root is not named, the children of an object
 are, with the names it parsed. A text is answered as the C string it is: its bytes up to its first zero byte (a
@@ -129,7 +133,8 @@ leaf before it is published: one that is right by a trick is removed.
 
 ## The buffer
 
-The output buffer a leaf is given is zeroed and holds `6 × (input length) + 16` bytes: more than any right answer.
+The output buffer a leaf is given is zeroed and holds `6 × (input length) + 16` bytes: more than any right answer,
+but for a success of `parse_value`, which can be longer and is then refused (its line, above).
 A leaf is a function of its input alone: the same input, the same answer, whatever was asked before.
 
 The build checks integer arithmetic (`-C overflow-checks=on`): an overflow, like an index out of bounds, ends the
