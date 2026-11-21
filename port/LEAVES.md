@@ -20,6 +20,7 @@ and the answer are. « Refused » means `Err(())`.
 | `parse_string` | `parse_string` | two bytes, the room (below), then a buffer (below): its offset, then its content; refused unless a byte lies at the offset (the original reads it without a check) (fewer than four bytes: refused) | one byte, 1 when the original succeeds and 0 when it fails; then the offset it leaves (two bytes, low byte first; it moves the offset when it fails too); then, when it succeeds, the block it asked for, as it leaves it (below) |
 | `strdup` | `cJSON_strdup` | two bytes, the room (below), then a text without a zero byte (with one: refused) (fewer than two bytes: refused) | the block it asked for, as it leaves it (below): the copy, its zero included; refused when the original fails (it returns `NULL`) |
 | `print_value` | `print_value`, as `cJSON_PrintPreallocated` calls it, with all it calls (`print_array`, `print_object`, `print_number`, `print_string_ptr`) | two bytes, low byte first, the length of the buffer the original prints into (the tree of items, below), then one byte, `format`, then one item in the tree's form (below); refused when that length is more than `6 × (input length) + 16` (the whole input's length, these three bytes included), when the item is cut short or bytes follow it, or when a text in it holds a zero byte (fewer than three bytes: refused) | the text the original prints, without its zero; refused when the original fails (it returns false) |
+| `parse_value` | `parse_value`, with all it calls (`parse_array`, `parse_object`, `parse_string`, `parse_number`, `buffer_skip_whitespace`) | two bytes, low byte first, the room, counted in allocations (the tree of items, below), then a buffer (below): its offset, then its content (fewer than four bytes: refused) | one byte, 1 when the original succeeds and 0 when it fails; then the offset it leaves (two bytes, low byte first; it moves the offset when it fails too); then, when it succeeds, the item it parsed, in the tree's form (below); refused when that answer is longer than `6 × (input length) + 16` bytes (the buffer the leaf answers in) |
 
 ## The leaves that allocate their result
 
@@ -35,8 +36,9 @@ get right is the block's length, the size the original asks.)
 ## The leaves of buffers
 
 The original reads its input through a buffer: a `parse_buffer`, a `printbuffer` for `update_offset`. Of it,
-`buffer_skip_whitespace`, `skip_utf8_bom`, `update_offset` and `parse_string` read the content, its `length` and the
-`offset`, and move the offset; they read nothing else of it but `parse_string`'s allocator (above). A buffer is given
+`buffer_skip_whitespace`, `skip_utf8_bom`, `update_offset`, `parse_string` and `parse_value` read the content, its
+`length` and the `offset`, and move the offset; they read nothing else of it but the allocator of `parse_string`
+(above) and of `parse_value` (below), and the depth of `parse_value` (below). A buffer is given
 as its offset, two bytes, low byte first, then its content: its length is the count of bytes that follow.
 
 Any offset may be given, at the end of the content or beyond it too, and the answer is then what the original does,
@@ -76,6 +78,19 @@ length given is at most the buffer the leaf answers in (the section « The buffe
 prints in it fits there. Every failure is a refusal, of the form or of the original: a leaf may read the form as it
 prints. A leaf that goes down one call for each array or object nested in another goes 1000 calls deep:
 the driver runs with the usual stack of 8 MB, so each such call must keep its own locals well under 8 KB.
+
+For `parse_value`, the driver gives the original a root item, zeroed (not counted in the room), and a parse buffer:
+the content, its length, the offset given, the depth 0, and an allocator. The allocator is the driver's: for each of
+the first `room` calls, it gives a zeroed block of the size asked, and from the next call on it fails (returns
+`NULL`). So the room counts allocations, not bytes. The original asks for one block for each item it adds to an array
+or an object (`cJSON_New_Item`), one for each string it parses, a name as much as a value (`parse_string`'s), and one
+for each number it parses (`parse_number`'s copy of its text, freed at once). It fails where an allocation fails, and
+on an array or an object entered at the depth `CJSON_NESTING_LIMIT` (1000; the root is entered at depth 0); when it
+fails, it frees what it built, and the answer is its success byte and its offset only. When it succeeds, the answer
+then holds the root in the tree's form, as the original left it: the root is not named, the children of an object
+are, with the names it parsed. A text is answered as the C string it is: its bytes up to its first zero byte (a
+`\u0000` ends it). The form holds no more of an item than the fields above: not the `valueint` 1 a `true` is given,
+not the `prev` links.
 
 `print_value`, `print_array` and `print_object` call one another, and `print_number` and `print_string_ptr`; a leaf
 is built alone (`port/src/lib.rs`), so this one is the whole printer: its file holds all the code it runs. It may
