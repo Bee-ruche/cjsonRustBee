@@ -16,12 +16,12 @@ the published tasks do.
 ## The judge decides what can be a task
 
 The judge checks only the leaves it has a unit for (`bee/reference/project.json`, under `units`: the cases it
-draws, the reference's driver and the port's). On 21 November 2026 the judge checks fourteen units. Their values of
+draws, the reference's driver and the port's). On 21 November 2026 the judge checks fifteen units. Their values of
 the option `unit`, word for word, are: `hex4`, `utf16`, `minify`, `print_string`, `strcasecmp`, `parse_number`,
 `compare_double`, `print_number`, `update_offset`, `buffer_skip_whitespace`, `skip_utf8_bom`, `parse_string`,
-`strdup`, `print_value`. The tasks of the first thirteen are done. When the judge learns to check a new unit, its
-author adds the unit's value to this list, word for word. A value listed here that no task names yet is one the
-cutter may write a task for, on the file `port/src/<unit>.rs`.
+`strdup`, `print_value`, `parse_value`. The tasks of the first thirteen are done. When the judge learns to check a
+new unit, its author adds the unit's value to this list, word for word. A value listed here that no task names yet is
+one the cutter may write a task for, on the file `port/src/<unit>.rs`.
 
 A new leaf needs the judge author first: its unit, its cases in `harness/c/generate.c`, the two drivers, its line in
 `port/LEAVES.md` and its blank file under `port/src/`. **The cutter writes no task for a leaf the judge has no unit
@@ -31,10 +31,11 @@ for.**
 
 The functions of their input alone (no allocation, no global state, no tree of items) are all units now, and so
 are the two whose only allocation is their result (`parse_string`, `strdup`). The tree of items has its byte form
-(`port/LEAVES.md`), and the printer is a unit: one, `print_value`, the whole printer, since `print_value`,
-`print_array` and `print_object` call one another and a leaf is built alone. What comes next is the judge author's
-work: `parse_value`, with the parsers it calls, the tree taken back from the port in the same byte form, with room
-counted in allocations.
+(`port/LEAVES.md`), given to the port and taken back from it: the printer is a unit, `print_value`, and so is the
+parser, `parse_value`, each whole, since their functions call one another and a leaf is built alone. What comes next
+is the judge author's work: the rest of cJSON's functions on trees, in the same form (the whole parse,
+`cJSON_ParseWithLengthOpts`, and the whole print with its allocations; `cJSON_Duplicate`, `cJSON_Compare`, the
+lookups, and the functions that add, detach, replace and delete items).
 
 The cutter names to the architect what it sees missing, and writes a task only for a unit listed above.
 

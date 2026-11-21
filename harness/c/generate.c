@@ -7,8 +7,9 @@
    - DRAWN cases, from what the leaf's inputs are made of: every byte value, every length up to the leaf's bound,
      the hard paths on purpose (escapes, surrogate pairs whole and broken, texts cut short, comments left open,
      control characters, zero bytes where a leaf refuses them, trees of every kind of item, nested deep, with a
-     buffer around the least length the printer takes), and the longest answers on purpose too (a text kept
-     whole, a text whose every byte is written as six, two texts of unequal lengths up to the bound).
+     buffer around the least length the printer takes, JSON texts with the room around the allocations the parser
+     asks for), and the longest answers on purpose too (a text kept whole, a text whose every byte is written as six,
+     two texts of unequal lengths up to the bound).
    The order is drawn too. A wrong leaf that is accepted names a path these cases do not reach: add the case here. */
 #include <float.h>
 #include <stdio.h>
@@ -1004,6 +1005,126 @@ static void put_fixed_tree(text *t, const char *description, int format, long de
         put(t, tree.bytes[n]);
 }
 
+/* The parser's cases: JSON texts drawn as trees, with whitespace between their tokens (any byte up to 32:
+   buffer_skip_whitespace skips zero bytes too), numbers, strings with every escape, near misses of the literals, cut
+   short or spoiled now and then. Beside each text, the count of allocations the original asks for to parse it whole
+   (an item for each child of an array or an object, a block for each name and each string, a copy for each number),
+   so that the room is drawn around it. */
+static void json_space(text *t)
+{
+    size_t n = below(3) ? 0 : below(4) ? 1 : below(6);
+    while (n--)
+        put(t, below(4) ? " \t\n\r"[below(4)] : (int)below(33));
+}
+
+static void json_number(text *t)
+{
+    if (below(8) == 0) {
+        parse_number_case(t);                                        /* the hard numbers, and what may follow them */
+        return;
+    }
+    if (below(3) == 0)
+        put(t, '-');
+    if (below(4) == 0)
+        put(t, '0');
+    else
+        put(t, '1' + (int)below(9)), digits(t, below(5) ? below(4) : below(20));
+    if (below(3) == 0)
+        put(t, '.'), digits(t, 1 + below(below(4) ? 3 : 20));
+    if (below(5) == 0) {
+        put(t, below(2) ? 'e' : 'E');
+        if (below(2))
+            put(t, below(2) ? '+' : '-');
+        digits(t, 1 + below(3));
+    }
+}
+
+static void parser_string(text *t, size_t most)                        /* a string, its quotes included */
+{
+    size_t end = t->length + 2 + (below(3) ? below(8) : below(most + 1));
+    put(t, '"');
+    while (t->length + 1 < end && t->length < LONGEST)
+        switch (below(12)) {
+        case 0: put(t, '\\'); put(t, "bfnrt\"\\/"[below(8)]); break;
+        case 1: escape(t, (unsigned)below(0xd800)); break;
+        case 2: escape(t, 0xd800 + (unsigned)below(0x400)); escape(t, 0xdc00 + (unsigned)below(0x400)); break;
+        case 3: if (below(12) == 0) string_body(t, t->length + 1 + below(6)); else put(t, 128 + (int)below(128)); break;
+        default: put(t, plain_byte()); break;
+        }
+    if (below(40))
+        put(t, '"');                                                 /* (else: left open) */
+}
+
+static void json_value(text *t, size_t depth, size_t most, size_t *allocations)
+{
+    static const char *near[] = {"nul", "fals", "tru", "NULL", "True", "nulL", "falsE", "t", "n", "f", "+1", ".5", "x", ""};
+    size_t start = t->length, pick = below(100), wanted, k;
+    int object;
+    if (chaining && most > 6)
+        pick = below(2) ? 70 : 90;
+    if (most < 8 && pick >= 64)
+        pick = below(64);
+    if (pick < 6) { puts_in(t, "null"); return; }
+    if (pick < 12) { puts_in(t, "false"); return; }
+    if (pick < 18) { puts_in(t, "true"); return; }
+    if (pick < 20) { puts_in(t, near[below(sizeof near / sizeof *near)]); return; }
+    if (pick < 38) { json_number(t); ++*allocations; return; }
+    if (pick < 64) { parser_string(t, most > 2 ? most - 2 : 0); ++*allocations; return; }
+    object = pick >= 82;
+    wanted = chaining ? 1 : below(3) ? below(4) : below(4) ? below(12) : below(40);
+    put(t, object ? '{' : '[');
+    json_space(t);
+    for (k = 0; k < wanted && t->length - start + 4 < most && t->length < LONGEST; k++) {
+        size_t left = most - (t->length - start) - 2, share = chaining || k + 1 == wanted ? left : 1 + below(left);
+        if (k)
+            put(t, ','), json_space(t);
+        ++*allocations;                                              /* the item */
+        if (object) {
+            parser_string(t, share / 4 + 1);
+            ++*allocations;                                          /* its name */
+            json_space(t), put(t, ':'), json_space(t);
+        }
+        json_value(t, depth + 1, share, allocations);
+        json_space(t);
+    }
+    put(t, object ? '}' : ']');
+}
+
+static void parse_value_case(text *t)
+{
+    static text content;
+    size_t most, allocations = 0, prefix = 0, room, offset, i;
+    content.length = 0;
+    if (below(6) == 0) {                                             /* bytes before the value, the offset past them */
+        for (i = 1 + below(4); i--; )
+            put(&content, below(2) ? ' ' : (int)below(256));
+        prefix = content.length;
+    }
+    chaining = below(12) == 0;
+    most = below(4) ? 1 + below(96) : below(4) ? 1 + below(600) : 1 + below(LONGEST - 8);   /* (the leaf's bound: 3072 bytes, the room and the offset included) */
+    json_value(&content, 0, most, &allocations);
+    chaining = 0;
+    if (below(4) == 0)
+        json_space(&content);
+    if (below(8) == 0)
+        put(&content, below(2) ? "],}:x"[below(5)] : (int)below(256));   /* what follows the value: not read */
+    if (below(6) == 0)
+        spoil(&content, LONGEST - 4);
+    switch (below(12)) {
+    case 0: case 1: case 2: room = allocations; break;
+    case 3: case 4: room = allocations ? allocations - 1 : 0; break;
+    case 5: room = allocations + 1 + below(2); break;
+    case 6: case 7: room = below(allocations + 1); break;
+    case 8: room = 0; break;
+    default: room = 65535; break;
+    }
+    offset = below(10) ? prefix : some_offset(content.length);
+    put_offset(t, room);
+    put_offset(t, offset);
+    for (i = 0; i < content.length; i++)
+        put(t, content.bytes[i]);
+}
+
 /* compare_double's fixed pairs, a then b, as patterns. The original says equal when |a - b| <= max(|a|, |b|)·DBL_EPSILON:
    around 1 and 2, the pairs a unit in the last place inside that bound, outside it, and on it (<=, not <); the
    infinities (an infinity is equal to every finite double and to the other infinity, not to itself: inf - inf is NaN);
@@ -1350,6 +1471,95 @@ static int special(text *t, const char *leaf, size_t number)
             put_bits(t, bits_of(d)), put_int(t, (unsigned)valueint);
             return 1;
         }
+    } else if (!strcmp(leaf, "parse_value")) {
+        /* the literals and their near misses, numbers at their edges, strings with a zero inside (the answer: the text up
+           to it), every way an array or an object is left open or broken, what follows a value; the room at every count
+           of allocations up to those two texts need and one more; zero bytes as whitespace; the nesting limit, at it and
+           past it, by arrays and by an object; offsets inside, at the end, beyond; an answer that just fits the answer's
+           buffer and one a byte too long; the longest inputs */
+        static const char *texts[] = {
+            "null", "false", "true", "nul", "fals", "tru", "NULL", "True", "nullx", "truex", "t", "-", "+1", ".5", "1", "-0",
+            "0", "01", "-01", "1.5e3", "1e999", "-1e999", "1e-999", "0x10", "1.", "1.e2", "2147483648", "-2147483649", "1-2",
+            "\"\"", "\"a\\u0000b\"", "\"\\ud83d\\ude00\"", "\"abc", "\"\\x\"", "[]", "{}", "[ ]", "{ }", "[1,]", "[,1]",
+            "[1 2]", "[1", "[", "{", "[ ", "{ ", "{\"a\":1,}", "{\"a\" 1}", "{\"a\":}", "{1:2}", "{\"a\":1", "{\"", "{\"a\"",
+            "{\"a\":", "{\"a\":1,", "{\"\\u0000x\":1}", " [1]", "[1]]", "{\"a\":[{\"b\":null}]}",
+            "[true,false,null,1,\"s\",[],{}]", "{\"\":\"\",\"\":1}", "[[[]]]", "[1,2,3]x", "{\"a\":1}x", "[\"\\u00e9\"]", "[-]",
+            "[1e]", "{\"a\"::1}", "[\"a\" ,\"b\"]", "{,}", "[\"a\":1]", "{\"a\":1 \"b\":2}"};
+        static const struct { size_t arrays; const char *inner; } deep[] = {
+            {1000, ""}, {1001, ""}, {999, "{\"\":[]}"}, {999, "{\"\":1}"}, {1000, "{}"}, {999, "{}"}, {1000, "1"}};
+        static const struct { const char *text; size_t offset; } offsets[] = {
+            {"null", 1}, {"null", 4}, {"null", 5}, {"null", 65535}, {"  null", 2}, {"xx[1]", 2}, {"[1,2]", 3}, {"[1,2]", 4}};
+        size_t k = number, n;
+        if (k < sizeof texts / sizeof *texts) {
+            put_offset(t, 65535), put_offset(t, 0), puts_in(t, texts[k]);
+            return 1;
+        }
+        k -= sizeof texts / sizeof *texts;
+        if (k < 12 + 9) {                                            /* (the first needs 10 allocations, the second 7) */
+            put_offset(t, k < 12 ? k : k - 12), put_offset(t, 0);
+            puts_in(t, k < 12 ? "{\"a\":[1,\"x\",{\"b\":2}]}" : "[\"ab\",-1.5,{\"\":[]}]");
+            return 1;
+        }
+        k -= 12 + 9;
+        if (k == 0) {                                                /* zero bytes, and every byte up to 32, as whitespace */
+            put_offset(t, 65535), put_offset(t, 0);
+            put(t, '['), put(t, 0), put(t, ' '), put(t, '1'), put(t, 0), put(t, ','), put(t, 31), put(t, '"'), put(t, 'a');
+            put(t, '"'), put(t, 1), put(t, ']');
+            return 1;
+        }
+        k -= 1;
+        if (k < sizeof deep / sizeof *deep) {
+            put_offset(t, 65535), put_offset(t, 0);
+            for (n = 0; n < deep[k].arrays; n++)
+                put(t, '[');
+            puts_in(t, deep[k].inner);
+            for (n = 0; n < deep[k].arrays; n++)
+                put(t, ']');
+            return 1;
+        }
+        k -= sizeof deep / sizeof *deep;
+        if (k < sizeof offsets / sizeof *offsets) {
+            put_offset(t, 65535), put_offset(t, offsets[k].offset), puts_in(t, offsets[k].text);
+            return 1;
+        }
+        k -= sizeof offsets / sizeof *offsets;
+        if (k < 5) {                                                 /* too short: refused; then the empty content */
+            for (n = 0; n < k; n++)
+                put(t, 0);
+            return 1;
+        }
+        k -= 5;
+        if (k < 2) {                                                 /* forty ones: the answer fills the answer's buffer; forty-one: refused */
+            put_offset(t, 65535), put_offset(t, 0), put(t, '[');
+            for (n = 0; n < 40 + k; n++)
+                puts_in(t, n ? ",1" : "1");
+            put(t, ']');
+            return 1;
+        }
+        k -= 2;
+        if (k < 2) {                                                 /* 1001 arrays, then objects, side by side: the depth goes back down after each */
+            put_offset(t, 65535), put_offset(t, 0), put(t, '[');
+            for (n = 0; n < 1001; n++)
+                puts_in(t, n ? (k ? ",{}" : ",[]") : (k ? "{}" : "[]"));
+            put(t, ']');
+            return 1;
+        }
+        k -= 2;
+        if (k < 3) {                                                 /* the longest: one long string; 1533 ones (refused); 1022 strings */
+            put_offset(t, 65535), put_offset(t, 0);
+            if (k == 0) {
+                put(t, '"');
+                for (n = 0; n < 3066; n++)
+                    put(t, 'a' + (int)(n % 26));
+                put(t, '"');
+            } else {
+                put(t, '[');
+                for (n = 0; n < (k == 1 ? 1533u : 1022u); n++)
+                    puts_in(t, k == 1 ? (n ? ",1" : "1") : (n ? ",\"\"" : "\"\""));
+                put(t, ']');
+            }
+            return 1;
+        }
     } else {
         /* two texts of 31 bytes: equal but for their case (0); then differing at their last byte only, both ways;
            then one a prefix of the other; then the shapes that are refused */
@@ -1449,6 +1659,7 @@ int main(int argc, char **argv)
     else if (!strcmp(argv[1], "parse_string")) draw = parse_string_case, bound = 256;
     else if (!strcmp(argv[1], "strdup")) draw = strdup_case, bound = 256;
     else if (!strcmp(argv[1], "print_value")) draw = print_value_case, bound = 3072;
+    else if (!strcmp(argv[1], "parse_value")) draw = parse_value_case, bound = 3072;
     else return 2;
     if (!fgets(seed, sizeof seed, stdin) || strlen(seed) < 32)
         return 2;

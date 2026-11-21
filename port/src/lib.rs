@@ -82,3 +82,8 @@ pub const ANSWER: Leaf = strdup::answer;
 pub mod print_value;
 #[cfg(unit = "print_value")]
 pub const ANSWER: Leaf = print_value::answer;
+
+#[cfg(unit = "parse_value")]
+pub mod parse_value;
+#[cfg(unit = "parse_value")]
+pub const ANSWER: Leaf = parse_value::answer;

@@ -178,6 +178,18 @@
       "case_bytes": 3072,
       "answer_bytes": 18448,
       "refuses": true
+    },
+    "parse_value": {
+      "files": [
+        "port/src/parse_value.rs"
+      ],
+      "blank": [
+        "port/blank.rs"
+      ],
+      "cases": 3000,
+      "case_bytes": 3072,
+      "answer_bytes": 18448,
+      "refuses": true
     }
   },
   "variants": 3,

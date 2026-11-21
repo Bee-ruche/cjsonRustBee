@@ -7,7 +7,7 @@
 # cases in two orders of its own; it bounds each build and each run in time and memory (bee/reference/project.json);
 # it builds with rustc 1.75, edition 2021 (use nothing newer: this check says which rustc it used).
 set -eu
-leaf="${1:?usage: sh bee/check.sh <leaf>   (hex4, utf16, minify, print_string, strcasecmp, parse_number, compare_double, print_number, buffer_skip_whitespace, skip_utf8_bom, update_offset, parse_string, strdup, print_value)}"
+leaf="${1:?usage: sh bee/check.sh <leaf>   (hex4, utf16, minify, print_string, strcasecmp, parse_number, compare_double, print_number, buffer_skip_whitespace, skip_utf8_bom, update_offset, parse_string, strdup, print_value, parse_value)}"
 [ -f "port/src/$leaf.rs" ] || { echo "check: no leaf port/src/$leaf.rs" >&2; exit 2; }
 for tool in cc rustc ld.lld; do
     command -v "$tool" >/dev/null || { echo "check: no $tool inside this sandbox: use the sandbox's image (AGENTS.md)" >&2; exit 3; }

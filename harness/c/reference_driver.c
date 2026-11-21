@@ -419,6 +419,119 @@ static int leaf_print_value(const unsigned char *in, size_t n, unsigned char *ou
     return 0;
 }
 
+/* The parsers: parse_value, given a root item (zeroed, the driver's: not counted in the room) and a parse buffer (the
+   content, its length, the offset given, the depth 0), with an allocator that gives a zeroed block of the size asked
+   for each of the first `room` calls and fails from the next on. The answer: the success byte, the offset left (two
+   bytes, low byte first), and on success the root in the tree's form; a text as the C string it is, its bytes up to its
+   zero. Refused when that answer would not fit the answer's buffer. */
+static size_t calls;
+
+static void *counted_allocate(size_t size)
+{
+    if (calls >= room)
+        return NULL;
+    calls++;
+    return calloc(size ? size : 1, 1);
+}
+
+typedef struct { unsigned char *out; size_t cap, at; } writer;
+
+static int write_byte(writer *w, unsigned value)
+{
+    if (w->at >= w->cap)
+        return 1;
+    w->out[w->at++] = (unsigned char)value;
+    return 0;
+}
+
+static int write_text(writer *w, const char *text)
+{
+    size_t length = text ? strlen(text) : 0xFFFF, i;
+    if (text && length >= 0xFFFF)
+        exit(4); /* never: the content is shorter */
+    if (write_byte(w, length & 255) || write_byte(w, length >> 8 & 255))
+        return 1;
+    for (i = 0; text && i < length; i++)
+        if (write_byte(w, (unsigned char)text[i]))
+            return 1;
+    return 0;
+}
+
+static int write_item(writer *w, const cJSON *item, int named)
+{
+    const cJSON *child;
+    unsigned long long bits;
+    size_t count = 0;
+    int i;
+    if (item->type & ~0xFF)
+        exit(4); /* never: the parsers set no flag */
+    if (write_byte(w, (unsigned)item->type) || (named && write_text(w, item->string)))
+        return 1;
+    switch (item->type) {
+    case cJSON_Number:
+        memcpy(&bits, &item->valuedouble, sizeof bits);
+        for (i = 0; i < 8; i++)
+            if (write_byte(w, (unsigned)(bits >> (8 * i) & 255)))
+                return 1;
+        for (i = 0; i < 4; i++)
+            if (write_byte(w, (unsigned)item->valueint >> (8 * i) & 255))
+                return 1;
+        return 0;
+    case cJSON_String:
+    case cJSON_Raw:
+        return write_text(w, item->valuestring);
+    case cJSON_Array:
+    case cJSON_Object:
+        for (child = item->child; child; child = child->next)
+            count++;
+        if (count > 0xFFFF)
+            exit(4); /* never: the content is shorter */
+        if (write_byte(w, count & 255) || write_byte(w, count >> 8 & 255))
+            return 1;
+        for (child = item->child; child; child = child->next)
+            if (write_item(w, child, item->type == cJSON_Object))
+                return 1;
+        return 0;
+    default:
+        return 0;
+    }
+}
+
+static int leaf_parse_value(const unsigned char *in, size_t n, unsigned char *out, size_t cap, size_t *len)
+{
+    parse_buffer buffer;
+    cJSON *root;
+    cJSON_bool parsed;
+    writer w;
+    if (n < 4)
+        return 1; /* no room or no offset */
+    room = offset_at(in);
+    calls = 0;
+    memset(&buffer, 0, sizeof buffer);
+    buffer.content = in + 4;
+    buffer.length = n - 4;
+    buffer.offset = offset_at(in + 2);
+    buffer.hooks.allocate = counted_allocate;
+    buffer.hooks.deallocate = free;
+    buffer.hooks.reallocate = NULL;
+    root = calloc(1, sizeof *root);
+    if (!root)
+        exit(3);
+    parsed = parse_value(root, &buffer);
+    if (buffer.offset > 0xFFFF || cap < 3)
+        exit(4); /* never: the offset moves only up to the content's length, beyond which nothing is read */
+    out[0] = parsed ? 1 : 0;
+    put_le(out + 1, buffer.offset, 2);
+    w.out = out, w.cap = cap, w.at = 3;
+    if (parsed && write_item(&w, root, 0)) {
+        cJSON_Delete(root);
+        return 1; /* the answer would not fit the answer's buffer */
+    }
+    cJSON_Delete(root);
+    *len = w.at;
+    return 0;
+}
+
 static unsigned long u32_at(const unsigned char *p) { return p[0] | (p[1] << 8) | (p[2] << 16) | ((unsigned long)p[3] << 24); }
 
 static void put_u32(FILE *f, unsigned long v)
@@ -434,7 +547,7 @@ int main(int argc, char **argv)
         {"hex4", leaf_hex4}, {"utf16", leaf_utf16}, {"minify", leaf_minify}, {"print_string", leaf_print_string}, {"strcasecmp", leaf_strcasecmp},
         {"parse_number", leaf_parse_number}, {"compare_double", leaf_compare_double}, {"print_number", leaf_print_number},
         {"buffer_skip_whitespace", leaf_buffer_skip_whitespace}, {"skip_utf8_bom", leaf_skip_utf8_bom}, {"update_offset", leaf_update_offset},
-        {"parse_string", leaf_parse_string}, {"strdup", leaf_strdup}, {"print_value", leaf_print_value}};
+        {"parse_string", leaf_parse_string}, {"strdup", leaf_strdup}, {"print_value", leaf_print_value}, {"parse_value", leaf_parse_value}};
     leaf_function leaf = NULL;
     FILE *in, *out;
     unsigned char *cases;
