@@ -52,3 +52,18 @@ pub const ANSWER: Leaf = compare_double::answer;
 pub mod print_number;
 #[cfg(unit = "print_number")]
 pub const ANSWER: Leaf = print_number::answer;
+
+#[cfg(unit = "buffer_skip_whitespace")]
+pub mod buffer_skip_whitespace;
+#[cfg(unit = "buffer_skip_whitespace")]
+pub const ANSWER: Leaf = buffer_skip_whitespace::answer;
+
+#[cfg(unit = "skip_utf8_bom")]
+pub mod skip_utf8_bom;
+#[cfg(unit = "skip_utf8_bom")]
+pub const ANSWER: Leaf = skip_utf8_bom::answer;
+
+#[cfg(unit = "update_offset")]
+pub mod update_offset;
+#[cfg(unit = "update_offset")]
+pub const ANSWER: Leaf = update_offset::answer;

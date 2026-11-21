@@ -106,6 +106,42 @@
       "case_bytes": 16,
       "answer_bytes": 112,
       "refuses": true
+    },
+    "buffer_skip_whitespace": {
+      "files": [
+        "port/src/buffer_skip_whitespace.rs"
+      ],
+      "blank": [
+        "port/blank.rs"
+      ],
+      "cases": 3000,
+      "case_bytes": 256,
+      "answer_bytes": 1552,
+      "refuses": true
+    },
+    "skip_utf8_bom": {
+      "files": [
+        "port/src/skip_utf8_bom.rs"
+      ],
+      "blank": [
+        "port/blank.rs"
+      ],
+      "cases": 2000,
+      "case_bytes": 16,
+      "answer_bytes": 112,
+      "refuses": true
+    },
+    "update_offset": {
+      "files": [
+        "port/src/update_offset.rs"
+      ],
+      "blank": [
+        "port/blank.rs"
+      ],
+      "cases": 3000,
+      "case_bytes": 256,
+      "answer_bytes": 1552,
+      "refuses": true
     }
   },
   "variants": 3,

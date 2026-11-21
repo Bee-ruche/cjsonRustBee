@@ -167,6 +167,71 @@ static int leaf_print_number(const unsigned char *in, size_t n, unsigned char *o
     return 0;
 }
 
+/* The leaves of buffers: of the buffer it is given (a parse_buffer; a printbuffer for update_offset), the original
+   reads the content, its length and the offset, and moves the offset. The input is the offset (two bytes, low byte
+   first), then the content: the length is the count of bytes that follow. The answer is the offset the original
+   leaves, two bytes, low byte first (it fits: the original moves an offset only up to the length, and the units' cases
+   are 256 bytes at most). The buffer's other fields are not read by these three: they are zero here. */
+static size_t offset_at(const unsigned char *in) { return (size_t)in[0] | (size_t)in[1] << 8; }
+
+static int answer_offset(size_t offset, unsigned char *out, size_t *len)
+{
+    if (offset > 0xFFFF)
+        exit(4); /* never: see above */
+    put_le(out, offset, 2);
+    *len = 2;
+    return 0;
+}
+
+static int leaf_buffer_skip_whitespace(const unsigned char *in, size_t n, unsigned char *out, size_t cap, size_t *len)
+{
+    parse_buffer buffer;
+    if (n < 2 || cap < 2)
+        return 1; /* no offset */
+    memset(&buffer, 0, sizeof buffer);
+    buffer.content = in + 2;
+    buffer.length = n - 2;
+    buffer.offset = offset_at(in);
+    buffer.hooks = global_hooks;
+    if (buffer_skip_whitespace(&buffer) != &buffer)
+        exit(4); /* never: its buffer and its content are not NULL */
+    return answer_offset(buffer.offset, out, len);
+}
+
+static int leaf_skip_utf8_bom(const unsigned char *in, size_t n, unsigned char *out, size_t cap, size_t *len)
+{
+    parse_buffer buffer;
+    if (n < 2 || cap < 2)
+        return 1; /* no offset */
+    memset(&buffer, 0, sizeof buffer);
+    buffer.content = in + 2;
+    buffer.length = n - 2;
+    buffer.offset = offset_at(in);
+    buffer.hooks = global_hooks;
+    if (skip_utf8_bom(&buffer) == NULL)
+        return 1; /* the original fails: the offset is not 0 */
+    return answer_offset(buffer.offset, out, len);
+}
+
+static int leaf_update_offset(const unsigned char *in, size_t n, unsigned char *out, size_t cap, size_t *len)
+{
+    printbuffer buffer;
+    size_t offset;
+    if (n < 2 || cap < 2)
+        return 1; /* no offset */
+    offset = offset_at(in);
+    if (offset >= n - 2 || !memchr(in + 2 + offset, 0, n - 2 - offset))
+        return 1; /* no zero byte at or after the offset: the original would read past the buffer's end */
+    memset(&buffer, 0, sizeof buffer);
+    buffer.buffer = (unsigned char *)(in + 2); /* (the original only reads it) */
+    buffer.length = n - 2;
+    buffer.offset = offset;
+    buffer.noalloc = true;
+    buffer.hooks = global_hooks;
+    update_offset(&buffer);
+    return answer_offset(buffer.offset, out, len);
+}
+
 static unsigned long u32_at(const unsigned char *p) { return p[0] | (p[1] << 8) | (p[2] << 16) | ((unsigned long)p[3] << 24); }
 
 static void put_u32(FILE *f, unsigned long v)
@@ -180,7 +245,8 @@ int main(int argc, char **argv)
 {
     static const struct { const char *name; leaf_function leaf; } leaves[] = {
         {"hex4", leaf_hex4}, {"utf16", leaf_utf16}, {"minify", leaf_minify}, {"print_string", leaf_print_string}, {"strcasecmp", leaf_strcasecmp},
-        {"parse_number", leaf_parse_number}, {"compare_double", leaf_compare_double}, {"print_number", leaf_print_number}};
+        {"parse_number", leaf_parse_number}, {"compare_double", leaf_compare_double}, {"print_number", leaf_print_number},
+        {"buffer_skip_whitespace", leaf_buffer_skip_whitespace}, {"skip_utf8_bom", leaf_skip_utf8_bom}, {"update_offset", leaf_update_offset}};
     leaf_function leaf = NULL;
     FILE *in, *out;
     unsigned char *cases;

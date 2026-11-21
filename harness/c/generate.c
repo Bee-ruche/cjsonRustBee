@@ -1,7 +1,7 @@
 /* The generator of cases: « generate <leaf> <count> [cases] », the seed (hexadecimal) on its input; writes /cases/cases
    (the judge's framing: « <u32 length><bytes> »…). For each leaf:
    - FIXED cases, at every draw: every constant the original compares with, and its neighbours (the bounds of a
-     UTF-8 length, of the surrogates, of a digit, of an int, of the doubles); the longest input the manifest allows (LONGEST below is the
+     UTF-8 length, of the surrogates, of a digit, of an int, of the doubles, of a byte skipped, of a buffer's end); the longest input the manifest allows (LONGEST below is the
      manifest's largest « case_bytes », and each leaf's own bound is the one its unit has there); the empty input;
    - DRAWN cases, from what the leaf's inputs are made of: every byte value, every length up to the leaf's bound,
      the hard paths on purpose (escapes, surrogate pairs whole and broken, texts cut short, comments left open,
@@ -484,6 +484,128 @@ static void print_number_case(text *t)
     }
 }
 
+/* The leaves of buffers: an offset (two bytes, low byte first), then the buffer's content, whose length is the count of
+   bytes that follow (port/LEAVES.md). The offset is drawn where the original's tests change: at the start, inside, on
+   the last byte, at the end and beyond it (where buffer_skip_whitespace moves nothing), far beyond (the high byte set) */
+static void put_offset(text *t, size_t offset)
+{
+    put(t, (int)(offset & 255));
+    put(t, (int)(offset >> 8 & 255));
+}
+
+static size_t some_offset(size_t n)
+{
+    switch (below(10)) {
+    case 0: return 0;
+    case 1: return n;                                                /* at the end */
+    case 2: return n + 1 + below(3);                                 /* beyond it */
+    case 3: return n ? n - 1 : 0;                                    /* the last byte */
+    case 4: return below(2) ? 65535 : 256 * (1 + below(255)) + below(2) * below(256);   /* far beyond */
+    default: return below(n + 1);
+    }
+}
+
+static int skipped_byte(void)                                        /* a byte buffer_skip_whitespace skips: 0 to 32 */
+{
+    return below(2) ? " \t\n\r"[below(4)] : below(4) ? (int)below(33) : below(2) ? 0 : 32;
+}
+
+static int stopping_byte(void)                                       /* a byte it stops at: 33 to 255 */
+{
+    switch (below(6)) {
+    case 0: return 33;
+    case 1: return 128 + (int)below(128);                            /* (a signed char would be less than 32) */
+    case 2: return below(2) ? 127 : 255;
+    case 3: return 160;                                              /* (32 + 128) */
+    default: return 33 + (int)below(223);
+    }
+}
+
+static void buffer_skip_whitespace_case(text *t)
+{
+    unsigned char content[LONGEST - 2];
+    size_t n = below(4) ? below(LONGEST - 1) : below(9), i = 0;      /* (the leaf's bound: 256 bytes, the offset's two included) */
+    while (i < n) {                                                  /* runs of bytes skipped and of bytes kept, short and long */
+        size_t run = below(4) ? 1 + below(4) : 1 + below(n);
+        int skipped = (int)below(2);
+        for (; run > 0 && i < n; run--)
+            content[i++] = (unsigned char)(skipped ? skipped_byte() : stopping_byte());
+    }
+    if (n && below(4) == 0)                                          /* nothing but bytes skipped to the end: the original steps back one */
+        for (i = below(n); i < n; i++)
+            content[i] = (unsigned char)skipped_byte();
+    put_offset(t, some_offset(n));
+    for (i = 0; i < n; i++)
+        put(t, content[i]);
+    if (below(60) == 0)
+        t->length = below(2);                                        /* no offset: refused */
+}
+
+/* Marks that are not UTF-8's (its length first), which the original does not skip: UTF-16 and UTF-32 both ways,
+   UTF-7, UTF-1, a UTF-16 mark and a zero byte; and UTF-8's twice, which it skips once */
+static const unsigned char OTHER_MARKS[][7] = {
+    {2, 0xFE, 0xFF}, {2, 0xFF, 0xFE}, {4, 0x00, 0x00, 0xFE, 0xFF}, {4, 0xFF, 0xFE, 0x00, 0x00}, {3, 0x2B, 0x2F, 0x76},
+    {3, 0xF7, 0x64, 0x4C}, {3, 0xFE, 0xFF, 0x00}, {6, 0xEF, 0xBB, 0xBF, 0xEF, 0xBB, 0xBF}};
+
+static void skip_utf8_bom_case(text *t)
+{
+    static const unsigned char bom[3] = {0xEF, 0xBB, 0xBF};
+    size_t n = below(2) ? 2 + below(5) : below(15), i, from = 0;     /* (the leaf's bound: 16 bytes, the offset's two included) */
+    if (below(6) == 0)                                               /* an offset that is not 0: refused (the original fails) */
+        put_offset(t, below(3) ? 1 + below(n + 2) : below(2) ? 256 * (1 + below(255)) : 1 + below(65535));
+    else
+        put_offset(t, 0);
+    if (below(5) == 0) {                                             /* another mark at the start */
+        const unsigned char *mark = OTHER_MARKS[below(sizeof OTHER_MARKS / sizeof *OTHER_MARKS)];
+        for (from = 0; from < mark[0]; from++)
+            put(t, mark[1 + from]);
+        n = from + below(15 - from);
+    }
+    for (i = from; i < n; i++) {
+        int c = (int)below(256);
+        if (i < 3 && below(6))                                       /* the mark, whole or nearly */
+            c = below(8) ? bom[i] : below(2) ? bom[i] + 1 - 2 * (int)below(2) : bom[(i + 1) % 3];
+        else if (below(5) == 0)
+            c = bom[below(3)];                                       /* a byte of the mark elsewhere */
+        else if (below(4) == 0)
+            c = 0;
+        put(t, c);
+    }
+    if (below(60) == 0)
+        t->length = below(2);                                        /* no offset: refused */
+}
+
+static void update_offset_case(text *t)
+{
+    unsigned char content[LONGEST - 2];
+    size_t n = below(4) ? below(LONGEST - 1) : below(9), zeros, i, offset;
+    for (i = 0; i < n; i++)
+        content[i] = (unsigned char)(below(4) ? 1 + (int)below(255) : (unsigned char)"a \x7f\x80\xff"[below(5)]);
+    switch (below(5)) {                                              /* zero bytes: none (refused), one, a few, many */
+    case 0: zeros = 0; break;
+    case 1: case 2: zeros = 1; break;
+    case 3: zeros = 2 + below(3); break;
+    default: zeros = n ? 1 + below(n) : 0; break;
+    }
+    for (i = 0; i < zeros && n; i++)
+        content[below(n)] = 0;
+    if (n && below(5) == 0)
+        content[n - 1] = 0;                                          /* the last byte */
+    offset = some_offset(n);                                         /* (where no zero byte lies at or after it: refused) */
+    if (n && below(3) == 0) {                                        /* on a zero byte, or just after it */
+        size_t at = below(n);
+        while (at < n && content[at])
+            at++;
+        if (at < n)
+            offset = at + below(2);
+    }
+    put_offset(t, offset);
+    for (i = 0; i < n; i++)
+        put(t, content[i]);
+    if (below(60) == 0)
+        t->length = below(2);                                        /* no offset: refused */
+}
+
 /* compare_double's fixed pairs, a then b, as patterns. The original says equal when |a - b| <= max(|a|, |b|)·DBL_EPSILON:
    around 1 and 2, the pairs a unit in the last place inside that bound, outside it, and on it (<=, not <); the
    infinities (an infinity is equal to every finite double and to the other infinity, not to itself: inf - inf is NaN);
@@ -584,6 +706,84 @@ static int special(text *t, const char *leaf, size_t number)
         if (number < values) { put_bits(t, bits_of(EDGE_VALUES[number])); put_int(t, 0); return 1; }
         number -= values;
         if (number < sizeof lengths / sizeof *lengths) { for (i = 0; i < lengths[number]; i++) put(t, 0x3f); return 1; }
+    } else if (!strcmp(leaf, "buffer_skip_whitespace")) {
+        /* the longest input, skipped to its end (the original steps back one), from the start and from its last byte,
+           and skipped to its last byte; every byte value at the offset, a byte kept after it; offsets at the end, beyond
+           it, far beyond (the high byte alone too); the empty content; no offset: refused */
+        static const size_t offsets[] = {2, 3, 255, 256, 65535};
+        if (number == 0) { put_offset(t, 0); for (i = 0; i < 254; i++) put(t, " \t\n\r"[i % 4]); return 1; }
+        if (number == 1) { put_offset(t, 0); for (i = 0; i < 253; i++) put(t, (int)(i % 33)); put(t, '!'); return 1; }
+        if (number == 2) { put_offset(t, 253); for (i = 0; i < 254; i++) put(t, ' '); return 1; }
+        if (number == 3) { put_offset(t, 256); for (i = 0; i < 254; i++) put(t, ' '); return 1; }
+        if (number < 4 + 256) { put_offset(t, 0); put(t, (int)(number - 4)); put(t, 'x'); return 1; }
+        number -= 4 + 256;
+        if (number < 5) { put_offset(t, offsets[number]); puts_in(t, "  "); return 1; }
+        number -= 5;
+        if (number == 0) { put_offset(t, 0); return 1; }
+        if (number == 1) { put_offset(t, 1); return 1; }
+        if (number == 2) { put_offset(t, 0); put(t, ' '); return 1; }
+        if (number == 3) { put_offset(t, 0); put(t, 'a'); return 1; }
+        if (number == 4) { put_offset(t, 1); puts_in(t, " \t"); return 1; }
+        if (number == 5) { put_offset(t, 1); puts_in(t, "a b"); return 1; }
+        if (number == 6) return 1;
+        if (number == 7) { put(t, ' '); return 1; }
+    } else if (!strcmp(leaf, "skip_utf8_bom")) {
+        /* the mark followed by 0 to 11 bytes (the original skips it only when two bytes at least follow it), the longest
+           input last; the mark with one byte off by one, at each place, either way; the mark and an offset that is not 0
+           (refused: the original fails), the high byte alone too; the mark elsewhere, turned round, after a zero byte;
+           the empty content; no offset: refused */
+        static const unsigned char bom[3] = {0xEF, 0xBB, 0xBF};
+        static const size_t offsets[] = {1, 2, 3, 255, 256, 0x8000, 65535};
+        if (number < 12) { put_offset(t, 0); for (i = 0; i < 3; i++) put(t, bom[i]); for (i = 0; i < number; i++) put(t, 'a' + (int)i); return 1; }
+        number -= 12;
+        if (number < 6) {
+            put_offset(t, 0);
+            for (i = 0; i < 3; i++) put(t, bom[i] + (i == number / 2 ? (number % 2 ? 1 : -1) : 0));
+            puts_in(t, "ab");
+            return 1;
+        }
+        number -= 6;
+        if (number < 7) { put_offset(t, offsets[number]); for (i = 0; i < 3; i++) put(t, bom[i]); puts_in(t, "abc"); return 1; }
+        number -= 7;
+        if (number == 0) { put_offset(t, 0); return 1; }
+        if (number == 1) { put_offset(t, 0); puts_in(t, "ab"); for (i = 0; i < 3; i++) put(t, bom[i]); return 1; }
+        if (number == 2) { put_offset(t, 0); for (i = 0; i < 3; i++) put(t, bom[(i + 1) % 3]); puts_in(t, "ab"); return 1; }
+        if (number == 3) { put_offset(t, 0); put(t, 0); for (i = 1; i < 3; i++) put(t, bom[i]); puts_in(t, "ab"); return 1; }
+        if (number == 4) { put_offset(t, 1); return 1; }
+        if (number == 5) return 1;
+        if (number == 6) { put(t, 0); return 1; }
+        number -= 7;
+        /* the mark and zero bytes after it (it is skipped); every other mark, followed by enough to be skipped (it is
+           not; but UTF-8's twice is skipped once) */
+        if (number < 3) { put_offset(t, 0); for (i = 0; i < 3; i++) put(t, bom[i]); put(t, number == 2 ? 'a' : 0); put(t, number == 1 ? 'a' : 0); return 1; }
+        number -= 3;
+        if (number < sizeof OTHER_MARKS / sizeof *OTHER_MARKS) {
+            put_offset(t, 0);
+            for (i = 0; i < OTHER_MARKS[number][0]; i++) put(t, OTHER_MARKS[number][1 + i]);
+            puts_in(t, "abcde");
+            return 1;
+        }
+    } else if (!strcmp(leaf, "update_offset")) {
+        /* the longest input, its only zero byte last, and without one (refused); a zero byte at the offset (nothing to
+           add), the last byte too; zero bytes before and after the offset, or only before it (refused); an offset at the
+           end, beyond it, far beyond (the high byte alone too): refused; bytes 128 to 255 are not zero; the empty content
+           (refused); no offset: refused */
+        if (number == 0) { put_offset(t, 0); for (i = 0; i < 253; i++) put(t, 'a' + (int)(i % 26)); put(t, 0); return 1; }
+        if (number == 1) { put_offset(t, 0); for (i = 0; i < 254; i++) put(t, 'a'); return 1; }
+        if (number == 2) { put_offset(t, 253); for (i = 0; i < 254; i++) put(t, 0); return 1; }
+        if (number == 3) { put_offset(t, 256); for (i = 0; i < 254; i++) put(t, 0); return 1; }
+        if (number == 4) { put_offset(t, 65535); for (i = 0; i < 254; i++) put(t, 0); return 1; }
+        if (number == 5) { put_offset(t, 0); put(t, 0); return 1; }
+        if (number == 6) { put_offset(t, 1); put(t, 'a'); put(t, 0); return 1; }
+        if (number == 7) { put_offset(t, 2); put(t, 'a'); put(t, 0); return 1; }
+        if (number == 8) { put_offset(t, 1); put(t, 0); put(t, 'b'); put(t, 0); return 1; }
+        if (number == 9) { put_offset(t, 0); puts_in(t, "ab"); put(t, 0); puts_in(t, "cd"); put(t, 0); return 1; }
+        if (number == 10) { put_offset(t, 3); puts_in(t, "ab"); put(t, 0); puts_in(t, "cd"); put(t, 0); return 1; }
+        if (number == 11) { put_offset(t, 3); puts_in(t, "ab"); put(t, 0); puts_in(t, "cd"); return 1; }
+        if (number == 12) { put_offset(t, 0); put(t, 0x80); put(t, 0xFF); put(t, 0); return 1; }
+        if (number == 13) { put_offset(t, 0); return 1; }
+        if (number == 14) return 1;
+        if (number == 15) { put(t, 0); return 1; }
     } else {
         /* two texts of 31 bytes: equal but for their case (0); then differing at their last byte only, both ways;
            then one a prefix of the other; then the shapes that are refused */
@@ -677,6 +877,9 @@ int main(int argc, char **argv)
     else if (!strcmp(argv[1], "parse_number")) draw = parse_number_case, fixed = FIXED_PARSE_NUMBER, known = sizeof FIXED_PARSE_NUMBER / sizeof *FIXED_PARSE_NUMBER, bound = 256;
     else if (!strcmp(argv[1], "compare_double")) draw = compare_double_case, bound = 32;
     else if (!strcmp(argv[1], "print_number")) draw = print_number_case, bound = 16;
+    else if (!strcmp(argv[1], "buffer_skip_whitespace")) draw = buffer_skip_whitespace_case, bound = 256;
+    else if (!strcmp(argv[1], "skip_utf8_bom")) draw = skip_utf8_bom_case, bound = 16;
+    else if (!strcmp(argv[1], "update_offset")) draw = update_offset_case, bound = 256;
     else return 2;
     if (!fgets(seed, sizeof seed, stdin) || strlen(seed) < 32)
         return 2;
