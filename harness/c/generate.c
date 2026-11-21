@@ -1373,15 +1373,15 @@ static int special(text *t, const char *leaf, size_t number)
             return 1;
         }
         k -= 4;
-        if (k < 12) {
+        if (k < 36) {
             /* a text's length near the top of its two bytes, or past what follows: 65534 (FE FF), 255 (FF 00), 32768 (00 80),
-               256 (00 01), each with fewer bytes than it says, as a String, a Raw, and an object's child's name: refused (cut
-               short) */
-            static const size_t lengths[] = {65534, 255, 32768, 256};
-            size_t length = lengths[k % 4], given = length <= 256 ? length - 1 : 3;
+               256 (00 01), 65280 (00 FF), 511 (FF 01); as a String, a Raw, and an object's child's name; with nothing after it
+               (a leaf taking that length for NULL would answer « "" »), and with fewer bytes than it says: refused (cut short) */
+            static const size_t lengths[] = {65534, 255, 32768, 256, 65280, 511};
+            size_t length = lengths[k % 6], place = k / 6 % 3, given = k < 18 ? 0 : length <= 511 ? length - 1 : 3;
             put_two(t, 0), put(t, 0);
-            if (k < 8)
-                put(t, k < 4 ? 16 : 128);
+            if (place < 2)
+                put(t, place ? 128 : 16);
             else
                 put(t, 64), put_two(t, 1), put(t, 4);
             put_two(t, length);
@@ -1390,7 +1390,7 @@ static int special(text *t, const char *leaf, size_t number)
             set_two(t, 0, 6 * t->length + 16);
             return 1;
         }
-        k -= 12;
+        k -= 36;
         if (k < 4) {
             /* counts at the top of their two bytes with little or nothing after: an array of 65535 children, of 65534 with one,
                an object of 65535, of 65534 with one: refused (cut short) */
