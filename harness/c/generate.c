@@ -1493,6 +1493,49 @@ static int special(text *t, const char *leaf, size_t number)
                 put(t, 4), put_two(t, 1), put(t, 'k');
             return 1;
         }
+        k -= 4;
+        if (k < 12) {
+            /* a text's length near the top of its two bytes, or past what follows: 65534 (FE FF), 255 (FF 00), 32768 (00 80),
+               256 (00 01), each with fewer bytes than it says, as a String, a Raw, and an object's child's name: refused (cut
+               short) */
+            static const size_t lengths[] = {65534, 255, 32768, 256};
+            size_t length = lengths[k % 4], given = length <= 256 ? length - 1 : 3;
+            put_two(t, 0), put(t, 0);
+            if (k < 8)
+                put(t, k < 4 ? 16 : 128);
+            else
+                put(t, 64), put_two(t, 1), put(t, 4);
+            put_two(t, length);
+            for (n = 0; n < given; n++)
+                put(t, 'a' + (int)(n % 26));
+            set_two(t, 0, 6 * t->length + 16);
+            return 1;
+        }
+        k -= 12;
+        if (k < 4) {
+            /* counts at the top of their two bytes with little or nothing after: an array of 65535 children, of 65534 with one,
+               an object of 65535, of 65534 with one: refused (cut short) */
+            put_two(t, 0), put(t, 0), put(t, k < 2 ? 32 : 64), put_two(t, k % 2 ? 65534 : 65535);
+            if (k == 1)
+                put(t, 4);
+            if (k == 3)
+                put(t, 4), put_two(t, 1), put(t, 'k');
+            set_two(t, 0, 6 * t->length + 16);
+            return 1;
+        }
+        k -= 4;
+        if (k < 4) {
+            /* NULL texts, the edge seen from the other side: a String FF FF and one byte after it (refused: a byte after the
+               item); answered, at the least length: an array of a String FF FF (« [""] »), an array of a String FF FF then
+               null (« ["",null] »), an object whose child has the name FF FF and the String FF FF (« {"":""} ») */
+            switch (k) {
+            case 0: put_two(t, 0), put(t, 0), put(t, 16), put_two(t, NOT_A_TEXT), put(t, 4), set_two(t, 0, 6 * t->length + 16); break;
+            case 1: put_two(t, 4 + 2), put(t, 0), put(t, 32), put_two(t, 1), put(t, 16), put_two(t, NOT_A_TEXT); break;
+            case 2: put_two(t, 9 + 2), put(t, 0), put(t, 32), put_two(t, 2), put(t, 16), put_two(t, NOT_A_TEXT), put(t, 4); break;
+            default: put_two(t, 7 + 2), put(t, 0), put(t, 64), put_two(t, 1), put(t, 16), put_two(t, NOT_A_TEXT), put_two(t, NOT_A_TEXT); break;
+            }
+            return 1;
+        }
     } else if (!strcmp(leaf, "parse_value")) {
         /* the literals and their near misses, numbers at their edges, strings with a zero inside (the answer: the text up
            to it), every way an array or an object is left open or broken, what follows a value; the room at every count
