@@ -14,6 +14,19 @@ and the answer are. « Refused » means `Err(())`.
 | `parse_number` | `parse_number` | any bytes: the text the original is asked to read a number from, at its start, and what follows | fourteen bytes: the count of input bytes the original read (two bytes, low byte first), then the `valuedouble` it set (a double, below), then the `valueint` it set (four bytes, low byte first, as a 32-bit two's complement); refused when the original fails |
 | `compare_double` | `compare_double` | exactly sixteen bytes: two doubles (below), `a` then `b` (any other length: refused) | one byte: 1 when the original says they are equal, else 0 |
 | `print_number` | `print_number` | exactly twelve bytes: an item's `valuedouble` (a double, below), then its `valueint` (four bytes, low byte first, as a 32-bit two's complement) (any other length: refused) | the text the original writes, without its zero byte |
+| `buffer_skip_whitespace` | `buffer_skip_whitespace` | a buffer (below): its offset, then its content (fewer than two bytes: refused) | two bytes: the offset the original leaves, low byte first |
+| `skip_utf8_bom` | `skip_utf8_bom` | a buffer (below): its offset, then its content (fewer than two bytes: refused) | two bytes: the offset the original leaves, low byte first; refused when the original fails (it returns `NULL`) |
+| `update_offset` | `update_offset` | a print buffer (below): its offset, then its content; refused unless a zero byte lies at or after the offset (fewer than two bytes: refused) | two bytes: the offset the original leaves, low byte first |
+
+## The leaves of buffers
+
+The original reads its input through a buffer: a `parse_buffer`, a `printbuffer` for `update_offset`. Of it, these
+three read the content, its `length` and the `offset`, and move the offset; they read nothing else of it. A buffer is
+given as its offset, two bytes, low byte first, then its content: its length is the count of bytes that follow.
+
+Any offset may be given: at the end of the content or beyond it too (the original is called then as well, and the
+answer is what it does). `update_offset` alone is not called where no zero byte lies at or after the offset: the
+original would read past the buffer's end, so the leaf refuses.
 
 ## The leaves of numbers
 
