@@ -142,6 +142,30 @@
       "case_bytes": 256,
       "answer_bytes": 1552,
       "refuses": true
+    },
+    "parse_string": {
+      "files": [
+        "port/src/parse_string.rs"
+      ],
+      "blank": [
+        "port/blank.rs"
+      ],
+      "cases": 4000,
+      "case_bytes": 256,
+      "answer_bytes": 1552,
+      "refuses": true
+    },
+    "strdup": {
+      "files": [
+        "port/src/strdup.rs"
+      ],
+      "blank": [
+        "port/blank.rs"
+      ],
+      "cases": 2000,
+      "case_bytes": 256,
+      "answer_bytes": 1552,
+      "refuses": true
     }
   },
   "variants": 3,

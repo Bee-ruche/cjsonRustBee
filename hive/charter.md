@@ -16,11 +16,12 @@ the published tasks do.
 ## The judge decides what can be a task
 
 The judge checks only the leaves it has a unit for (`bee/reference/project.json`, under `units`: the cases it
-draws, the reference's driver and the port's). On 21 November 2026 the judge checks eleven units. Their values of
+draws, the reference's driver and the port's). On 21 November 2026 the judge checks thirteen units. Their values of
 the option `unit`, word for word, are: `hex4`, `utf16`, `minify`, `print_string`, `strcasecmp`, `parse_number`,
-`compare_double`, `print_number`, `update_offset`, `buffer_skip_whitespace`, `skip_utf8_bom`. Each one's task is
-done. When the judge learns to check a new unit, its author adds the unit's value to this list, word for word. A
-value listed here that no task names yet is one the cutter may write a task for, on the file `port/src/<unit>.rs`.
+`compare_double`, `print_number`, `update_offset`, `buffer_skip_whitespace`, `skip_utf8_bom`, `parse_string`,
+`strdup`. The tasks of the first eleven are done. When the judge learns to check a new unit, its author adds the
+unit's value to this list, word for word. A value listed here that no task names yet is one the cutter may write a
+task for, on the file `port/src/<unit>.rs`.
 
 A new leaf needs the judge author first: its unit, its cases in `harness/c/generate.c`, the two drivers, its line in
 `port/LEAVES.md` and its blank file under `port/src/`. **The cutter writes no task for a leaf the judge has no unit
@@ -28,12 +29,11 @@ for.**
 
 ## What comes next
 
-The functions of their input alone (no allocation, no global state, no tree of items) are all units now. What
-comes next is the judge author's work, in this order:
-1. The pieces whose only allocation is their result (`parse_string` first): the port writes the result into room
-   the leaf's driver gives it.
-2. The tree of items (`parse_value`, `parse_array`, `parse_object`, and their printers), built in room the driver
-   gives, once the judge can check a tree.
+The functions of their input alone (no allocation, no global state, no tree of items) are all units now, and so
+are the two whose only allocation is their result (`parse_string`, `strdup`). What comes next is the judge author's
+work: the tree of items, given to the port and taken back from it in one byte form, with room counted in
+allocations, as the design of 21 November 2026 says (Bee-ruche/cjsonRustBee pull request 7): the printers first
+(`print_value`, `print_array`, `print_object`), then `parse_value`.
 
 The cutter names to the architect what it sees missing, and writes a task only for a unit listed above.
 
