@@ -541,20 +541,34 @@ static void buffer_skip_whitespace_case(text *t)
         t->length = below(2);                                        /* no offset: refused */
 }
 
+/* Marks that are not UTF-8's (its length first), which the original does not skip: UTF-16 and UTF-32 both ways,
+   UTF-7, UTF-1, a UTF-16 mark and a zero byte; and UTF-8's twice, which it skips once */
+static const unsigned char OTHER_MARKS[][7] = {
+    {2, 0xFE, 0xFF}, {2, 0xFF, 0xFE}, {4, 0x00, 0x00, 0xFE, 0xFF}, {4, 0xFF, 0xFE, 0x00, 0x00}, {3, 0x2B, 0x2F, 0x76},
+    {3, 0xF7, 0x64, 0x4C}, {3, 0xFE, 0xFF, 0x00}, {6, 0xEF, 0xBB, 0xBF, 0xEF, 0xBB, 0xBF}};
+
 static void skip_utf8_bom_case(text *t)
 {
     static const unsigned char bom[3] = {0xEF, 0xBB, 0xBF};
-    size_t n = below(2) ? 2 + below(5) : below(15), i;               /* (the leaf's bound: 16 bytes, the offset's two included) */
+    size_t n = below(2) ? 2 + below(5) : below(15), i, from = 0;     /* (the leaf's bound: 16 bytes, the offset's two included) */
     if (below(6) == 0)                                               /* an offset that is not 0: refused (the original fails) */
-        put_offset(t, below(3) ? 1 + below(n + 2) : below(2) ? 256 * (1 + below(255)) : below(65536));
+        put_offset(t, below(3) ? 1 + below(n + 2) : below(2) ? 256 * (1 + below(255)) : 1 + below(65535));
     else
         put_offset(t, 0);
-    for (i = 0; i < n; i++) {
+    if (below(5) == 0) {                                             /* another mark at the start */
+        const unsigned char *mark = OTHER_MARKS[below(sizeof OTHER_MARKS / sizeof *OTHER_MARKS)];
+        for (from = 0; from < mark[0]; from++)
+            put(t, mark[1 + from]);
+        n = from + below(15 - from);
+    }
+    for (i = from; i < n; i++) {
         int c = (int)below(256);
         if (i < 3 && below(6))                                       /* the mark, whole or nearly */
             c = below(8) ? bom[i] : below(2) ? bom[i] + 1 - 2 * (int)below(2) : bom[(i + 1) % 3];
         else if (below(5) == 0)
             c = bom[below(3)];                                       /* a byte of the mark elsewhere */
+        else if (below(4) == 0)
+            c = 0;
         put(t, c);
     }
     if (below(60) == 0)
@@ -738,6 +752,17 @@ static int special(text *t, const char *leaf, size_t number)
         if (number == 4) { put_offset(t, 1); return 1; }
         if (number == 5) return 1;
         if (number == 6) { put(t, 0); return 1; }
+        number -= 7;
+        /* the mark and zero bytes after it (it is skipped); every other mark, followed by enough to be skipped (it is
+           not; but UTF-8's twice is skipped once) */
+        if (number < 3) { put_offset(t, 0); for (i = 0; i < 3; i++) put(t, bom[i]); put(t, number == 2 ? 'a' : 0); put(t, number == 1 ? 'a' : 0); return 1; }
+        number -= 3;
+        if (number < sizeof OTHER_MARKS / sizeof *OTHER_MARKS) {
+            put_offset(t, 0);
+            for (i = 0; i < OTHER_MARKS[number][0]; i++) put(t, OTHER_MARKS[number][1 + i]);
+            puts_in(t, "abcde");
+            return 1;
+        }
     } else if (!strcmp(leaf, "update_offset")) {
         /* the longest input, its only zero byte last, and without one (refused); a zero byte at the offset (nothing to
            add), the last byte too; zero bytes before and after the offset, or only before it (refused); an offset at the

@@ -24,9 +24,9 @@ The original reads its input through a buffer: a `parse_buffer`, a `printbuffer`
 three read the content, its `length` and the `offset`, and move the offset; they read nothing else of it. A buffer is
 given as its offset, two bytes, low byte first, then its content: its length is the count of bytes that follow.
 
-Any offset may be given: at the end of the content or beyond it too (the original is called then as well, and the
-answer is what it does). `update_offset` alone is not called where no zero byte lies at or after the offset: the
-original would read past the buffer's end, so the leaf refuses.
+Any offset may be given, at the end of the content or beyond it too, and the answer is then what the original does,
+but in one case: `update_offset` is not called where no zero byte lies at or after the offset (the original would
+read past the buffer's end), and the leaf refuses.
 
 ## The leaves of numbers
 
