@@ -67,3 +67,13 @@ pub const ANSWER: Leaf = skip_utf8_bom::answer;
 pub mod update_offset;
 #[cfg(unit = "update_offset")]
 pub const ANSWER: Leaf = update_offset::answer;
+
+#[cfg(unit = "parse_string")]
+pub mod parse_string;
+#[cfg(unit = "parse_string")]
+pub const ANSWER: Leaf = parse_string::answer;
+
+#[cfg(unit = "strdup")]
+pub mod strdup;
+#[cfg(unit = "strdup")]
+pub const ANSWER: Leaf = strdup::answer;
