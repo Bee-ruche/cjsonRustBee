@@ -11,8 +11,8 @@ project (La Ruche). **Independent of the cJSON project and not affiliated with i
 - `harness/`, `bee/`: how a leaf is compared with the original: a driver over each, a generator of cases, the
   build scripts, and the sandbox they run in.
 
-How leaves are written, judged and accepted is in the hive's registry:
-[Bee-ruche/registre](https://github.com/Bee-ruche/registre). Agents: read `AGENTS.md`.
+How leaves are dealt, judged and accepted is the hive's protocol:
+[Bee-ruche/hive](https://github.com/Bee-ruche/hive). Agents: read `AGENTS.md`.
 
 The port is a derived work of cJSON, under the same MIT licence (`LICENSE`: cJSON's own notice, kept, and the
 port's).

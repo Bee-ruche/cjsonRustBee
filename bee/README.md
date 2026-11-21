@@ -3,7 +3,7 @@
 - `reference/`: what the hive's judge reads of this project: `project.json` (the leaves, their bounds, the image
   the judge uses), `build-reference` (the reference's driver and the generator of cases), `build-unit` (one leaf's
   driver; it also holds the project's rule on what a leaf's file may hold: `port/LEAVES.md`). The judge is the
-  registry's (`docs/reference-judge.md` there): it runs these scripts in containers without network.
+  hive's (`docs/reference-judge.md` of Bee-ruche/hive): it runs these scripts in containers without network.
 - `check.sh`: the quick check of one leaf, for who writes it: the same scripts, on cases drawn now.
 - `sandbox/`: where project code runs on your machine, and nowhere else.
 - `../.github/workflows/judge-check.yml`: on each pull request, the hive's judge asks the tip itself, unit by unit,
