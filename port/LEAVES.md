@@ -17,6 +17,17 @@ and the answer are. « Refused » means `Err(())`.
 | `buffer_skip_whitespace` | `buffer_skip_whitespace` | a buffer (below): its offset, then its content (fewer than two bytes: refused) | two bytes: the offset the original leaves, low byte first |
 | `skip_utf8_bom` | `skip_utf8_bom` | a buffer (below): its offset, then its content (fewer than two bytes: refused) | two bytes: the offset the original leaves, low byte first; refused when the original fails (it returns `NULL`) |
 | `update_offset` | `update_offset` | a print buffer (below): its offset, then its content; refused unless a zero byte lies at or after the offset (fewer than two bytes: refused) | two bytes: the offset the original leaves, low byte first |
+| `parse_string` | `parse_string` | two bytes, the room (below), then a buffer (below): its offset, then its content; refused unless a byte lies at the offset (the original reads it without a check) (fewer than four bytes: refused) | one byte, 1 when the original succeeds and 0 when it fails; then the offset it leaves (two bytes, low byte first; it moves the offset when it fails too); then, when it succeeds, the block it asked for, as it leaves it (below) |
+| `strdup` | `cJSON_strdup` | two bytes, the room (below), then a text without a zero byte (with one: refused) (fewer than two bytes: refused) | the block it asked for, as it leaves it (below): the copy, its zero included; refused when the original fails (it returns `NULL`) |
+
+## The leaves that allocate their result
+
+These leaves' original asks its allocator (`hooks.allocate`) for one block, for its result. The allocator here is
+the driver's: it gives a block of exactly the size asked, zeroed, when that size is at most the room, and fails
+(returns `NULL`) when it is larger. The room is the input's first two bytes, low byte first. So the size the
+original asks is part of what it does: the leaf computes it, fails as the original does when the room is too small,
+and answers the whole block as the original leaves it, the bytes it wrote first (a zero byte among them too, as
+`\u0000` writes one), then its terminating zero, then the zeros the original did not write over, to the block's end.
 
 ## The leaves of buffers
 

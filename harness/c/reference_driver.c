@@ -232,6 +232,75 @@ static int leaf_update_offset(const unsigned char *in, size_t n, unsigned char *
     return answer_offset(buffer.offset, out, len);
 }
 
+/* The leaves that allocate their result: the original asks its hooks for one block (allocate). The input's first two
+   bytes, low byte first, are the room: the driver's allocator gives a zeroed block of exactly the size asked when that
+   size is at most the room, and fails (returns NULL) above it. The answer holds the block as the original leaves it. */
+static size_t room, asked;
+
+static void *room_allocate(size_t size)
+{
+    asked = size;
+    return size <= room ? calloc(size ? size : 1, 1) : NULL;
+}
+
+static int leaf_parse_string(const unsigned char *in, size_t n, unsigned char *out, size_t cap, size_t *len)
+{
+    parse_buffer buffer;
+    cJSON item;
+    cJSON_bool parsed;
+    if (n < 4 || offset_at(in + 2) >= n - 4)
+        return 1; /* no room or no offset; or no byte at the offset: the original reads it without a check */
+    room = offset_at(in);
+    asked = 0;
+    memset(&buffer, 0, sizeof buffer);
+    buffer.content = in + 4;
+    buffer.length = n - 4;
+    buffer.offset = offset_at(in + 2);
+    buffer.hooks.allocate = room_allocate;
+    buffer.hooks.deallocate = free;
+    buffer.hooks.reallocate = NULL;
+    memset(&item, 0, sizeof item);
+    parsed = parse_string(&item, &buffer);
+    if (buffer.offset > 0xFFFF || (parsed && (item.valuestring == NULL || 3 + asked > cap)))
+        exit(4); /* never: the offset stays within the content, and the block within its length */
+    out[0] = parsed ? 1 : 0;
+    put_le(out + 1, buffer.offset, 2);
+    *len = 3;
+    if (parsed) {
+        memcpy(out + 3, item.valuestring, asked);
+        *len += asked;
+        free(item.valuestring);
+    }
+    return 0;
+}
+
+static int leaf_strdup(const unsigned char *in, size_t n, unsigned char *out, size_t cap, size_t *len)
+{
+    internal_hooks hooks;
+    unsigned char *text, *copy;
+    if (n < 2 || memchr(in + 2, 0, n - 2))
+        return 1; /* no room; or a zero byte: the original takes a text ended by one */
+    text = calloc(n - 1, 1);
+    if (!text)
+        exit(3);
+    memcpy(text, in + 2, n - 2);
+    room = offset_at(in);
+    asked = 0;
+    hooks.allocate = room_allocate;
+    hooks.deallocate = free;
+    hooks.reallocate = NULL;
+    copy = cJSON_strdup(text, &hooks);
+    free(text);
+    if (copy == NULL)
+        return 1; /* the original fails: its allocation fails */
+    if (asked > cap)
+        exit(4); /* never */
+    memcpy(out, copy, asked);
+    *len = asked;
+    free(copy);
+    return 0;
+}
+
 static unsigned long u32_at(const unsigned char *p) { return p[0] | (p[1] << 8) | (p[2] << 16) | ((unsigned long)p[3] << 24); }
 
 static void put_u32(FILE *f, unsigned long v)
@@ -246,7 +315,8 @@ int main(int argc, char **argv)
     static const struct { const char *name; leaf_function leaf; } leaves[] = {
         {"hex4", leaf_hex4}, {"utf16", leaf_utf16}, {"minify", leaf_minify}, {"print_string", leaf_print_string}, {"strcasecmp", leaf_strcasecmp},
         {"parse_number", leaf_parse_number}, {"compare_double", leaf_compare_double}, {"print_number", leaf_print_number},
-        {"buffer_skip_whitespace", leaf_buffer_skip_whitespace}, {"skip_utf8_bom", leaf_skip_utf8_bom}, {"update_offset", leaf_update_offset}};
+        {"buffer_skip_whitespace", leaf_buffer_skip_whitespace}, {"skip_utf8_bom", leaf_skip_utf8_bom}, {"update_offset", leaf_update_offset},
+        {"parse_string", leaf_parse_string}, {"strdup", leaf_strdup}};
     leaf_function leaf = NULL;
     FILE *in, *out;
     unsigned char *cases;

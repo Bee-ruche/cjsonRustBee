@@ -606,6 +606,111 @@ static void update_offset_case(text *t)
         t->length = below(2);                                        /* no offset: refused */
 }
 
+/* The leaves that allocate their result: the room first (two bytes, low byte first; put as an offset is), the most the
+   allocator gives. parse_string's room is drawn around the size the original asks: from its opening quote to its
+   closing one, less one byte for each backslash, plus one (0: it fails before it asks) */
+static size_t string_size(const unsigned char *content, size_t n, size_t offset)
+{
+    size_t end = offset + 1, skipped = 0;
+    if (offset >= n || content[offset] != '"')
+        return 0;
+    while (end < n && content[end] != '"') {
+        if (content[end] == '\\') {
+            if (end + 1 >= n)
+                return 0;
+            skipped++;
+            end++;
+        }
+        end++;
+    }
+    return end < n ? end - offset - skipped + 1 : 0;
+}
+
+static size_t some_room(size_t size)
+{
+    switch (below(9)) {
+    case 0: return size;                                             /* exactly the size asked */
+    case 1: return size ? size - 1 : 0;                              /* one byte short: the allocation fails */
+    case 2: return size + 1;
+    case 3: return below(size + 1);
+    case 4: return 0;
+    case 5: return 256 * (1 + below(255));                           /* the high byte alone */
+    default: return below(2) ? 65535 : size + below(65536 - size);
+    }
+}
+
+static void string_body(text *t, size_t most)                        /* what lies between the quotes */
+{
+    static const unsigned bmp[] = {0x41, 0x7f, 0x80, 0xe9, 0x7ff, 0x800, 0x20ac, 0xd7ff, 0xe000, 0xfffd, 0xffff, 0};
+    while (t->length < most) {
+        switch (below(14)) {
+        case 0: case 1: case 2: case 3: put(t, 'a' + (int)below(26)); break;
+        case 4: { int c = (int)below(256); put(t, c == '"' || c == '\\' ? ' ' : c); break; }   /* any other byte, as it is */
+        case 5: put(t, '\\'); put(t, "bfnrt\"\\/"[below(8)]); break;                        /* the escapes it knows */
+        case 6: put(t, '\\'); put(t, (int)below(256)); break;                               /* any escape */
+        case 7: escape(t, below(2) ? bmp[below(sizeof bmp / sizeof *bmp)] : (unsigned)below(0xd800)); break;
+        case 8: escape(t, 0xd800 + (unsigned)below(0x400)); escape(t, 0xdc00 + (unsigned)below(0x400)); break;   /* a pair */
+        case 9:                                                                             /* a pair broken */
+            escape(t, (below(2) ? 0xd800 : 0xdc00) + (unsigned)below(0x400));
+            switch (below(4)) {
+            case 0: escape(t, (unsigned)below(0x10000)); break;
+            case 1: puts_in(t, "\\U"); hex_digits(t, 0xdc00 + (unsigned)below(0x400), 4); break;
+            case 2: puts_in(t, "\\u"); hex_digits(t, 0xdc00 + (unsigned)below(0x400), (int)below(4)); break;
+            default: break;
+            }
+            break;
+        case 10: puts_in(t, "\\u"); hex_digits(t, (unsigned)below(0x10000), (int)below(4)); put(t, "g /\"zG"[below(6)]); break;   /* cut short, or not hexadecimal */
+        case 11: put(t, below(4) ? (int)below(32) : 0); break;                              /* control bytes and zero bytes, as they are */
+        case 12: put(t, 128 + (int)below(128)); break;
+        default: put(t, ' '); break;
+        }
+    }
+}
+
+static void parse_string_case(text *t)
+{
+    text c;
+    size_t prefix = below(4) ? 0 : 1 + below(3), most = below(4) ? 2 + below(LONGEST - 6) : 2 + below(24), offset, i;
+    memset(&c, 0, sizeof c);
+    for (i = 0; i < prefix; i++)                                     /* what lies before the offset */
+        put(&c, " a\"\\"[below(4)]);
+    put(&c, below(12) ? '"' : (int)below(256));                      /* (not a quote: it fails) */
+    string_body(&c, prefix + 1 + below(most));
+    switch (below(20)) {
+    case 0: break;                                                   /* no closing quote: it fails */
+    case 1: put(&c, '\\'); break;                                    /* a backslash last: it fails */
+    default: put(&c, '"'); break;
+    }
+    if (below(4) == 0)                                               /* something after the string */
+        for (i = 1 + below(4); i > 0; i--)
+            put(&c, below(2) ? '"' : 'z');
+    if (c.length > LONGEST - 4)
+        c.length = LONGEST - 4;                                      /* (the leaf's bound: 256 bytes, room and offset included) */
+    switch (below(12)) {
+    case 0: offset = below(c.length + 1); break;                     /* anywhere (at the end: refused) */
+    case 1: offset = c.length + below(3); break;                     /* at the end or beyond: refused */
+    default: offset = prefix; break;                                 /* at the opening quote */
+    }
+    put_offset(t, some_room(string_size(c.bytes, c.length, offset)));
+    put_offset(t, offset);
+    for (i = 0; i < c.length; i++)
+        put(t, c.bytes[i]);
+    if (below(60) == 0)
+        t->length = below(4);                                        /* no room or no offset: refused */
+}
+
+static void strdup_case(text *t)
+{
+    size_t n = below(4) ? below(LONGEST - 1) : below(9), i;          /* (the leaf's bound: 256 bytes, the room's two included) */
+    put_offset(t, some_room(n + 1));                                 /* (the size it asks: the text and its zero) */
+    for (i = 0; i < n; i++)
+        put(t, below(4) ? 'a' + (int)below(26) : 1 + (int)below(255));
+    if (n && below(20) == 0)
+        t->bytes[2 + below(n)] = 0;                                  /* a zero byte: refused */
+    if (below(60) == 0)
+        t->length = below(2);                                        /* no room: refused */
+}
+
 /* compare_double's fixed pairs, a then b, as patterns. The original says equal when |a - b| <= max(|a|, |b|)·DBL_EPSILON:
    around 1 and 2, the pairs a unit in the last place inside that bound, outside it, and on it (<=, not <); the
    infinities (an infinity is equal to every finite double and to the other infinity, not to itself: inf - inf is NaN);
@@ -784,6 +889,69 @@ static int special(text *t, const char *leaf, size_t number)
         if (number == 13) { put_offset(t, 0); return 1; }
         if (number == 14) return 1;
         if (number == 15) { put(t, 0); return 1; }
+    } else if (!strcmp(leaf, "parse_string")) {
+        /* strings with every escape it knows, \u of every length of UTF-8 and their bounds, pairs whole and broken, a zero
+           written, digits that are not hexadecimal, cut short, unclosed, a backslash last, not a string; every byte value
+           between the quotes, and after a backslash; rooms at the size asked, one short, none, the high byte alone; offsets
+           after a prefix, on a byte that is not a quote, at the end and beyond (refused); the longest inputs; too short */
+        static const char *strings[] = {
+            "\"\"", "\"a\"", "\"abc\" rest", "\"\\\"\"", "\"\\\\\"", "\"\\/\"", "\"\\b\\f\\n\\r\\t\"", "\"a\\\"b\" c\"",
+            "\"\\u0041\"", "\"\\u007F\"", "\"\\u0080\"", "\"\\u00e9\"", "\"\\u07FF\"", "\"\\u0800\"", "\"\\u20ac\"", "\"\\uD7FF\"",
+            "\"\\uE000\"", "\"\\uFFFF\"", "\"\\ud83d\\ude00\"", "\"\\uD800\\uDC00\"", "\"\\uDBFF\\uDFFF\"", "\"\\u0000\"",
+            "\"a\\u0000b\"", "\"\\uzzzz\"", "\"\\u00G1\"", "\"\\ud800\"", "\"\\udc00\"", "\"\\udfff\"", "\"\\ud800\\u0041\"",
+            "\"\\ud800\\udbff\"", "\"\\ud800\\ue000\"", "\"\\ud800x\\udc00\"", "\"\\ud800\\Udc00\"", "\"\\ud800\\udc0\"", "\"\\u12\"",
+            "\"\\u\"", "\"\\x\"", "\"\\U0041\"", "\"\\'\"", "\"abc", "\"abc\\", "\"abc\\\"", "abc\"", "\"", "\"\\", " \"a\"",
+            "\"\\u0041\\", "\"\\\\\\\"\"", "\"\\\\\"\"", "\"caf\xc3\xa9\"", "\"\x01\x1f\x7f\x80\xff\""};
+        static const size_t rooms[] = {0, 1, 2, 3, 4, 5, 6, 256};
+        size_t count = sizeof strings / sizeof *strings, at;
+        if (number < count) { put_offset(t, 65535); put_offset(t, 0); puts_in(t, strings[number]); return 1; }
+        number -= count;
+        if (number < 256) { put_offset(t, 65535); put_offset(t, 0); put(t, '"'); put(t, (int)number); put(t, '"'); return 1; }
+        number -= 256;
+        if (number < 256) { put_offset(t, 65535); put_offset(t, 0); put(t, '"'); put(t, '\\'); put(t, (int)number); put(t, '"'); return 1; }
+        number -= 256;
+        /* "\u20ac" asks for 7 bytes and writes 3 and its zero: every room up to it; then "ab" (it asks for 4) */
+        if (number < 9) { put_offset(t, number); put_offset(t, 0); puts_in(t, "\"\\u20ac\""); return 1; }
+        number -= 9;
+        if (number < sizeof rooms / sizeof *rooms) { put_offset(t, rooms[number]); put_offset(t, 0); puts_in(t, "\"ab\""); return 1; }
+        number -= sizeof rooms / sizeof *rooms;
+        if (number == 0) { put_offset(t, 65535); put_offset(t, 3); puts_in(t, "ab \"x\""); return 1; }
+        if (number == 1) { put_offset(t, 65535); put_offset(t, 2); puts_in(t, "ab \"x\""); return 1; }
+        if (number == 2) { put_offset(t, 65535); put_offset(t, 6); puts_in(t, "ab \"x\""); return 1; }   /* at the end: refused */
+        if (number == 3) { put_offset(t, 65535); put_offset(t, 65535); puts_in(t, "\"x\""); return 1; }
+        if (number == 4) { put_offset(t, 65535); put_offset(t, 0); return 1; }                       /* no content: refused */
+        if (number == 5) { put_offset(t, 65535); put_offset(t, 0x0100); for (i = 0; i < 252; i++) put(t, '"'); return 1; }
+        if (number == 6) { put_offset(t, 65535); put(t, 0); return 1; }
+        if (number == 7) return 1;
+        if (number == 8) { put_offset(t, 65535); put_offset(t, 0); put(t, '"'); for (i = 0; i < 250; i++) put(t, 'a' + (int)(i % 26)); put(t, '"'); return 1; }
+        if (number == 9) { put_offset(t, 65535); put_offset(t, 0); put(t, '"'); for (i = 0; i < 125; i++) puts_in(t, "\\n"); put(t, '"'); return 1; }
+        if (number == 10) { put_offset(t, 65535); put_offset(t, 0); put(t, '"'); for (i = 0; i < 41; i++) puts_in(t, "\\u20AC"); puts_in(t, "abcd\""); return 1; }
+        if (number == 11) { put_offset(t, 65535); put_offset(t, 0); put(t, '"'); for (i = 0; i < 20; i++) puts_in(t, "\\uD83D\\uDE00"); puts_in(t, "abcdefghi\""); return 1; }
+        if (number == 12) { put_offset(t, 65535); put_offset(t, 0); put(t, '"'); for (i = 0; i < 251; i++) put(t, 'z'); return 1; }   /* unclosed */
+        if (number == 13) { put_offset(t, 252); put_offset(t, 0); put(t, '"'); for (i = 0; i < 250; i++) put(t, 'q'); put(t, '"'); return 1; }   /* it asks for 252 */
+        if (number == 14) { put_offset(t, 251); put_offset(t, 0); put(t, '"'); for (i = 0; i < 250; i++) put(t, 'q'); put(t, '"'); return 1; }
+        at = number - 15;
+        if (at < 4) {                                                /* a failure after its allocation: the block is given back */
+            static const char *late[] = {"\"abc\\x\"", "\"abc\\ud800\"", "\"abc\\u12\"", "\"abc\\udc00 \""};
+            put_offset(t, 65535); put_offset(t, 0); puts_in(t, late[at]); return 1;
+        }
+    } else if (!strcmp(leaf, "strdup")) {
+        /* the empty text, with room for its zero and without; the longest text, with the room it needs, one short, the high
+           byte alone; a zero byte in the text (refused); too short (refused); every byte value but zero */
+        if (number == 0) { put_offset(t, 1); return 1; }
+        if (number == 1) { put_offset(t, 0); return 1; }
+        if (number < 2 + 4) {
+            static const size_t rooms[] = {65535, 255, 254, 256};
+            put_offset(t, rooms[number - 2]); for (i = 0; i < 254; i++) put(t, 'a' + (int)(i % 26)); return 1;
+        }
+        if (number == 6) { put_offset(t, 65535); puts_in(t, "ab"); put(t, 0); puts_in(t, "cd"); return 1; }
+        if (number == 7) { put_offset(t, 65535); put(t, 0); return 1; }
+        if (number == 8) return 1;
+        if (number == 9) { put(t, 5); return 1; }
+        if (number == 10) { put_offset(t, 4); puts_in(t, "abc"); return 1; }
+        if (number == 11) { put_offset(t, 3); puts_in(t, "abc"); return 1; }
+        if (number == 12) { put_offset(t, 65535); for (i = 1; i < 255; i++) put(t, (int)i); return 1; }
+        if (number == 13) { put_offset(t, 65535); put(t, 255); return 1; }
     } else {
         /* two texts of 31 bytes: equal but for their case (0); then differing at their last byte only, both ways;
            then one a prefix of the other; then the shapes that are refused */
@@ -880,6 +1048,8 @@ int main(int argc, char **argv)
     else if (!strcmp(argv[1], "buffer_skip_whitespace")) draw = buffer_skip_whitespace_case, bound = 256;
     else if (!strcmp(argv[1], "skip_utf8_bom")) draw = skip_utf8_bom_case, bound = 16;
     else if (!strcmp(argv[1], "update_offset")) draw = update_offset_case, bound = 256;
+    else if (!strcmp(argv[1], "parse_string")) draw = parse_string_case, bound = 256;
+    else if (!strcmp(argv[1], "strdup")) draw = strdup_case, bound = 256;
     else return 2;
     if (!fgets(seed, sizeof seed, stdin) || strlen(seed) < 32)
         return 2;
