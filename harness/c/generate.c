@@ -1010,15 +1010,38 @@ static void put_fixed_tree(text *t, const char *description, int format, long de
    short or spoiled now and then. Beside each text, the count of allocations the original asks for to parse it whole
    (an item for each child of an array or an object, a block for each name and each string, a copy for each number),
    so that the room is drawn around it. */
+static int stopping;                                                 /* (some texts: now and then a byte that is not whitespace) */
+
 static void json_space(text *t)
 {
     size_t n = below(3) ? 0 : below(4) ? 1 : below(6);
     while (n--)
         put(t, below(4) ? " \t\n\r"[below(4)] : (int)below(33));
+    if (stopping && below(24) == 0)                                  /* where whitespace may be, a byte above 32: it stops the parse there */
+        put(t, "!\177\200\240\377#/"[below(7)]);
 }
 
 static void json_number(text *t)
 {
+    static const char *odd[] = {"1.2.3", "-+1", "--1", "+-1", "-.5", "-.5e1", "-inf", "-nan", "-Infinity", "-1e", "1e+", "1.e5",
+                                "0x1p3", "1..2", "1e5.5", "1ee5", "1E-+5", "-0.0e-0", "1.5E+", "-", "00.5"};
+    if (below(16) == 0) {                                            /* what JSON and strtod read otherwise, or not at all */
+        puts_in(t, odd[below(sizeof odd / sizeof *odd)]);
+        return;
+    }
+    if (below(24) == 0) {                                            /* long numbers: the original copies any length for strtod */
+        if (below(2))
+            put(t, '-');
+        if (below(3))
+            put(t, '1' + (int)below(9)), digits(t, below(1500));
+        else
+            put(t, '0');
+        if (below(2))
+            put(t, '.'), digits(t, 1 + below(1500));
+        if (below(3) == 0)
+            put(t, 'e'), digits(t, 1 + below(4));
+        return;
+    }
     if (below(8) == 0) {
         parse_number_case(t);                                        /* the hard numbers, and what may follow them */
         return;
@@ -1047,7 +1070,13 @@ static void parser_string(text *t, size_t most)                        /* a stri
         switch (below(12)) {
         case 0: put(t, '\\'); put(t, "bfnrt\"\\/"[below(8)]); break;
         case 1: escape(t, (unsigned)below(0xd800)); break;
-        case 2: escape(t, 0xd800 + (unsigned)below(0x400)); escape(t, 0xdc00 + (unsigned)below(0x400)); break;
+        case 2:                                                      /* a pair, its second half cut short now and then */
+            escape(t, 0xd800 + (unsigned)below(0x400));
+            if (below(8))
+                escape(t, 0xdc00 + (unsigned)below(0x400));
+            else
+                put(t, '\\'), put(t, 'u'), hex_digits(t, 0xdc00 + (unsigned)below(0x400), (int)below(4));
+            break;
         case 3:                                                      /* (string_body runs up to its end: never past what put writes) */
             if (below(12) == 0) { size_t to = t->length + 1 + below(6); string_body(t, to < LONGEST ? to : LONGEST); }
             else put(t, 128 + (int)below(128));
@@ -1074,7 +1103,7 @@ static void json_value(text *t, size_t depth, size_t most, size_t *allocations)
     if (pick < 38) { json_number(t); ++*allocations; return; }
     if (pick < 64) { parser_string(t, most > 2 ? most - 2 : 0); ++*allocations; return; }
     object = pick >= 82;
-    wanted = chaining ? 1 : below(3) ? below(4) : below(4) ? below(12) : below(40);
+    wanted = chaining ? 1 : below(3) ? below(4) : below(4) ? below(12) : below(16) ? below(40) : below(400);   /* (counts above 255 too) */
     put(t, object ? '{' : '[');
     json_space(t);
     for (k = 0; k < wanted && t->length - start + 4 < most && t->length < LONGEST; k++) {
@@ -1093,6 +1122,25 @@ static void json_value(text *t, size_t depth, size_t most, size_t *allocations)
     put(t, object ? '}' : ']');
 }
 
+/* short numbers side by side: an answer of 13 bytes for every 2 or 3 bytes read, around the leaf's buffer and past it;
+   broken somewhere half the time, so that the parse fails after it has built more than the buffer holds */
+static void dense_array(text *t, size_t *allocations)
+{
+    size_t count = 1 + below(below(2) ? 64 : 1530), twos = below(3) ? 0 : 2 + below(10), i;
+    put(t, '[');
+    for (i = 0; i < count && t->length + 3 < LONGEST - 4; i++) {
+        if (i)
+            put(t, ',');
+        put(t, '0' + (int)below(10));
+        if (twos && below(twos) == 0)
+            put(t, '0' + (int)below(10));
+        *allocations += 2;                                           /* the item, and the number's copy */
+    }
+    put(t, ']');
+    if (below(2))
+        t->bytes[below(t->length)] = (unsigned char)"x],"[below(3)];
+}
+
 static void parse_value_case(text *t)
 {
     static text content;
@@ -1104,9 +1152,13 @@ static void parse_value_case(text *t)
         prefix = content.length;
     }
     chaining = below(12) == 0;
+    stopping = below(16) == 0;
     most = below(4) ? 1 + below(96) : below(4) ? 1 + below(600) : 1 + below(LONGEST - 8);   /* (the leaf's bound: 3072 bytes, the room and the offset included) */
-    json_value(&content, 0, most, &allocations);
-    chaining = 0;
+    if (below(24) == 0)
+        dense_array(&content, &allocations);
+    else
+        json_value(&content, 0, most, &allocations);
+    chaining = 0, stopping = 0;
     if (below(4) == 0)
         json_space(&content);
     if (below(8) == 0)
@@ -1128,6 +1180,42 @@ static void parse_value_case(text *t)
     put_offset(t, offset);
     for (i = 0; i < content.length; i++)
         put(t, content.bytes[i]);
+}
+
+static void nest(text *t, const char *open, const char *close, size_t levels, const char *inner)
+{
+    size_t n;
+    for (n = 0; n < levels; n++)
+        puts_in(t, open);
+    puts_in(t, inner);
+    for (n = 0; n < levels; n++)
+        puts_in(t, close);
+}
+
+/* c·2^-1075, a midpoint between two subnormal doubles for an odd c, written out in full: c·5^1075 / 10^1075, so 1075
+   decimals; with `above`, a last digit 1 more, just above the midpoint. c = 1: between 0 and the least subnormal
+   (rounded to the even 0); 5: between 2 and 3 of them (to 2); 2^53 - 3: between 2^52 - 2 and 2^52 - 1 (to the first) */
+static void exact_midpoint(text *t, size_t which, int above)
+{
+    static const unsigned long long c[] = {1, 5, (1ULL << 53) - 3};
+    unsigned char d[800];                                            /* decimal digits, the lowest first: c·5^1075 has at most 768 */
+    size_t length = 1, i, e;
+    unsigned long long carry, v;
+    d[0] = 1;
+    for (e = 0; e <= 1075; e++)                                      /* times 5, 1075 times; then times c */
+        for (i = 0, carry = 0; i < length || carry; i++) {
+            v = (i < length ? d[i] : 0) * (e < 1075 ? 5ULL : c[which]) + carry;
+            d[i] = (unsigned char)(v % 10), carry = v / 10;
+            if (i >= length)
+                length = i + 1;
+        }
+    puts_in(t, "0.");
+    for (i = length; i < 1075; i++)
+        put(t, '0');
+    for (i = length; i-- > 0; )
+        put(t, '0' + d[i]);
+    if (above)
+        put(t, '1');
 }
 
 /* compare_double's fixed pairs, a then b, as patterns. The original says equal when |a - b| <= max(|a|, |b|)·DBL_EPSILON:
@@ -1546,7 +1634,10 @@ static int special(text *t, const char *leaf, size_t number)
            to it), every way an array or an object is left open or broken, what follows a value; the room at every count
            of allocations up to those two texts need and one more; zero bytes as whitespace; the nesting limit, at it and
            past it, by arrays and by an object; offsets inside, at the end, beyond; an answer that just fits the answer's
-           buffer and one a byte too long; the longest inputs */
+           buffer and one a byte too long; the longest inputs; numbers JSON and strtod read otherwise; bytes above 32 where
+           whitespace may be; pairs of escapes cut short; zero bytes as they are in strings and names; the depth after a deep container that held something, and objects
+           600 deep; objects of more than 255 members; a failure after a tree longer than the buffer; numbers of 1000
+           digits, and midpoints of subnormals written out in full */
         static const char *texts[] = {
             "null", "false", "true", "nul", "fals", "tru", "NULL", "True", "nullx", "truex", "t", "-", "+1", ".5", "1", "-0",
             "0", "01", "-01", "1.5e3", "1e999", "-1e999", "1e-999", "0x10", "1.", "1.e2", "2147483648", "-2147483649", "1-2",
@@ -1559,6 +1650,11 @@ static int special(text *t, const char *leaf, size_t number)
             {1000, ""}, {1001, ""}, {999, "{\"\":[]}"}, {999, "{\"\":1}"}, {1000, "{}"}, {999, "{}"}, {1000, "1"}};
         static const struct { const char *text; size_t offset; } offsets[] = {
             {"null", 1}, {"null", 4}, {"null", 5}, {"null", 65535}, {"  null", 2}, {"xx[1]", 2}, {"[1,2]", 3}, {"[1,2]", 4}};
+        static const char *more[] = {
+            "-inf", "-nan", "[-Infinity]", "[1.2.3]", "-+1", "[--1]", "-.5", "[-.5e1]", "[1e5.5]", "[0x10]",
+            "[1,\177 2]", "[\177 1]", "[!1]", "[1,!2]", "[1,\377" "2]", "{\177\"a\":1}", "{\"a\"!:1}", "{\"a\":1\177}", "[1\200]",
+            "[1 \240]", "\"%d800%dc0\"", "\"%d800%dc\"", "\"%d800%d\"", "\"%d800%\"", "\"%d800\\\"", "\"%d800\"",
+            "{\"%d800%dc0\":1}", "[\"%d800%dc0\"]", "\"%d800%dc00\"", "\"%dbff%dfff\"", "\"a`b\"", "{\"a`b\":\"c`\"}", "[\"`\",\"x\"]"};
         size_t k = number, n;
         if (k < sizeof texts / sizeof *texts) {
             put_offset(t, 65535), put_offset(t, 0), puts_in(t, texts[k]);
@@ -1628,6 +1724,69 @@ static int special(text *t, const char *leaf, size_t number)
                     puts_in(t, k == 1 ? (n ? ",1" : "1") : (n ? ",\"\"" : "\"\""));
                 put(t, ']');
             }
+            return 1;
+        }
+        k -= 3;
+        if (k < sizeof more / sizeof *more) {                        /* (in these, % stands for a backslash and a u, ` for a zero byte) */
+            const char *s;
+            put_offset(t, 65535), put_offset(t, 0);
+            for (s = more[k]; *s; s++)
+                if (*s == '%')
+                    put(t, '\\'), put(t, 'u');
+                else
+                    put(t, *s == '`' ? 0 : *s);
+            return 1;
+        }
+        k -= sizeof more / sizeof *more;
+        if (k < 3) {                                                 /* a deep sibling that held something, closed, then another deep one; objects 600 deep */
+            put_offset(t, 65535), put_offset(t, 0);
+            if (k == 2) {
+                nest(t, "{\"\":", "}", 600, "1");
+                return 1;
+            }
+            put(t, '[');
+            if (k == 0)
+                nest(t, "[", "]", 600, "1");
+            else
+                nest(t, "{\"\":", "}", 300, "1");
+            put(t, ',');
+            nest(t, "[", "]", k == 0 ? 401 : 705, "1");
+            put(t, ']');
+            return 1;
+        }
+        k -= 3;
+        if (k < 3) {                                                 /* objects of 255, 256 and 300 members: a count above one byte */
+            static const size_t members[] = {255, 256, 300};
+            put_offset(t, 65535), put_offset(t, 0), put(t, '{');
+            for (n = 0; n < members[k]; n++)
+                puts_in(t, n ? ",\"\":0" : "\"\":0");
+            put(t, '}');
+            return 1;
+        }
+        k -= 3;
+        if (k < 2) {                                                 /* 1500 ones, then a failure: the answer is the failure's, though the tree built was longer than the buffer */
+            put_offset(t, 65535), put_offset(t, 0), put(t, '[');
+            for (n = 0; n < 1500; n++)
+                puts_in(t, "1,");
+            puts_in(t, k ? "x]" : "1");
+            return 1;
+        }
+        k -= 2;
+        if (k < 2 + 6) {                                             /* numbers copied whole: 1000 digits, 900 zeros; three midpoints of subnormals, exact and just above */
+            put_offset(t, 65535), put_offset(t, 0), put(t, '[');
+            if (k == 0) {
+                put(t, '1');
+                for (n = 0; n < 1000; n++)
+                    put(t, '0');
+            } else if (k == 1) {
+                puts_in(t, "0.");
+                for (n = 0; n < 900; n++)
+                    put(t, '0');
+                put(t, '1');
+            } else {
+                exact_midpoint(t, (k - 2) / 2, (int)((k - 2) % 2));
+            }
+            put(t, ']');
             return 1;
         }
     } else {
