@@ -1150,6 +1150,9 @@ static void parse_value_case(text *t)
         for (i = 1 + below(4); i--; )
             put(&content, below(2) ? ' ' : (int)below(256));
         prefix = content.length;
+    } else if (below(20) == 0) {                                     /* the UTF-8 mark: parse_value does not skip it (offset 0), or the offset past it */
+        puts_in(&content, "\xEF\xBB\xBF");
+        prefix = below(2) ? 3 : 0;
     }
     chaining = below(12) == 0;
     stopping = below(16) == 0;
@@ -1180,6 +1183,15 @@ static void parse_value_case(text *t)
     put_offset(t, offset);
     for (i = 0; i < content.length; i++)
         put(t, content.bytes[i]);
+}
+
+static void put_marked(text *t, const char *s)                       /* % stands for a backslash and a u, ` for a zero byte */
+{
+    for (; *s; s++)
+        if (*s == '%')
+            put(t, '\\'), put(t, 'u');
+        else
+            put(t, *s == '`' ? 0 : *s);
 }
 
 static void nest(text *t, const char *open, const char *close, size_t levels, const char *inner)
@@ -1637,7 +1649,9 @@ static int special(text *t, const char *leaf, size_t number)
            buffer and one a byte too long; the longest inputs; numbers JSON and strtod read otherwise; bytes above 32 where
            whitespace may be; pairs of escapes cut short; zero bytes as they are in strings and names; the depth after a deep container that held something, and objects
            600 deep; objects of more than 255 members; a failure after a tree longer than the buffer; numbers of 1000
-           digits, and midpoints of subnormals written out in full */
+           digits, and midpoints of subnormals written out in full; the UTF-8 mark, which parse_value does not skip; a lone
+           low surrogate first; every control byte in a string and a name; a backslash last, after other bytes; the deep ones at the rooms around what they ask
+           before the depth fails; failing texts at every room up to what they ask */
         static const char *texts[] = {
             "null", "false", "true", "nul", "fals", "tru", "NULL", "True", "nullx", "truex", "t", "-", "+1", ".5", "1", "-0",
             "0", "01", "-01", "1.5e3", "1e999", "-1e999", "1e-999", "0x10", "1.", "1.e2", "2147483648", "-2147483649", "1-2",
@@ -1649,12 +1663,27 @@ static int special(text *t, const char *leaf, size_t number)
         static const struct { size_t arrays; const char *inner; } deep[] = {
             {1000, ""}, {1001, ""}, {999, "{\"\":[]}"}, {999, "{\"\":1}"}, {1000, "{}"}, {999, "{}"}, {1000, "1"}};
         static const struct { const char *text; size_t offset; } offsets[] = {
-            {"null", 1}, {"null", 4}, {"null", 5}, {"null", 65535}, {"  null", 2}, {"xx[1]", 2}, {"[1,2]", 3}, {"[1,2]", 4}};
+            {"null", 1}, {"null", 4}, {"null", 5}, {"null", 65535}, {"  null", 2}, {"xx[1]", 2}, {"[1,2]", 3}, {"[1,2]", 4},
+            {"\xEF\xBB\xBF[1]", 3}, {"\xEF\xBB\xBF[1]", 1}};
         static const char *more[] = {
             "-inf", "-nan", "[-Infinity]", "[1.2.3]", "-+1", "[--1]", "-.5", "[-.5e1]", "[1e5.5]", "[0x10]",
             "[1,\177 2]", "[\177 1]", "[!1]", "[1,!2]", "[1,\377" "2]", "{\177\"a\":1}", "{\"a\"!:1}", "{\"a\":1\177}", "[1\200]",
             "[1 \240]", "\"%d800%dc0\"", "\"%d800%dc\"", "\"%d800%d\"", "\"%d800%\"", "\"%d800\\\"", "\"%d800\"",
-            "{\"%d800%dc0\":1}", "[\"%d800%dc0\"]", "\"%d800%dc00\"", "\"%dbff%dfff\"", "\"a`b\"", "{\"a`b\":\"c`\"}", "[\"`\",\"x\"]"};
+            "{\"%d800%dc0\":1}", "[\"%d800%dc0\"]", "\"%d800%dc00\"", "\"%dbff%dfff\"", "\"a`b\"", "{\"a`b\":\"c`\"}", "[\"`\",\"x\"]",
+            "\xEF\xBB\xBF[]", "\xEF\xBB\xBFnull", "\xEF\xBB\xBF", "\xEF\xBB\xBF  [1]", "  \xEF\xBB\xBF" "1", "[\xEF\xBB\xBF" "1]",
+            "\"%dc00\"", "{\"%dc00\":1}", "[\"%dfff\"]", "\"ab\\", "[\"ab\\", "{\"ab\\", "{\"a\":\"bc\\",
+            "\"\001\002\003\004\005\006\007\010\011\012\013\014\015\016\017\020\021\022\023\024\025\026\027\030\031\032\033\034\035\036\037\"",
+            "{\"\001\002\003\004\005\006\007\010\011\012\013\014\015\016\017\020\021\022\023\024\025\026\027\030\031\032\033\034\035\036\037\":\"\037\001\"}"};
+        /* the deep ones: 1001 arrays; 1000 around an object; 999 around an object around an array; arrays and objects in
+           turn, and 300 objects then arrays, both unclosed (the depth fails on the way down). Beside each, the allocations
+           the original asks for before the 1001st container fails: a room short of it fails on an allocation instead */
+        static const size_t need[] = {1000, 1000, 1001, 1500, 1300};
+        /* failing texts, each at every room from 0 to 5 (more than any of them asks for): where the room runs out at the
+           point it fails */
+        static const char *broken[] = {"[1,", "[ ", "{ ", "{\"a\":1,", "{\"a\":1, ", "{\"a\" 1}", "\"\\x\"", "\"%12g4\"", "\"%d800\"",
+                                       "[\"\\x\"]", "{\"\\q\":1}", "{\"a\":\"%d800\"}", "[1, ", "[  ", "[\"%dc00\",1",
+                                       /* (a bad escape after other bytes: failing on the block and on the escape leave two offsets) */
+                                       "\"ab\\x\"", "\"a%d800\"", "\"a%dc00\"", "[\"a\\x\"]", "{\"a\\q\":1}", "{\"a\":\"b%d800\"}"};
         size_t k = number, n;
         if (k < sizeof texts / sizeof *texts) {
             put_offset(t, 65535), put_offset(t, 0), puts_in(t, texts[k]);
@@ -1727,14 +1756,8 @@ static int special(text *t, const char *leaf, size_t number)
             return 1;
         }
         k -= 3;
-        if (k < sizeof more / sizeof *more) {                        /* (in these, % stands for a backslash and a u, ` for a zero byte) */
-            const char *s;
-            put_offset(t, 65535), put_offset(t, 0);
-            for (s = more[k]; *s; s++)
-                if (*s == '%')
-                    put(t, '\\'), put(t, 'u');
-                else
-                    put(t, *s == '`' ? 0 : *s);
+        if (k < sizeof more / sizeof *more) {                        /* (marked: % stands for a backslash and a u, ` for a zero byte) */
+            put_offset(t, 65535), put_offset(t, 0), put_marked(t, more[k]);
             return 1;
         }
         k -= sizeof more / sizeof *more;
@@ -1787,6 +1810,27 @@ static int special(text *t, const char *leaf, size_t number)
                 exact_midpoint(t, (k - 2) / 2, (int)((k - 2) % 2));
             }
             put(t, ']');
+            return 1;
+        }
+        k -= 2 + 6;
+        if (k < 5 * 5) {                                             /* the deep ones, at the rooms from 2 below what they ask before the 1001st container to 2 above */
+            size_t shape = k / 5;
+            put_offset(t, need[shape] - 2 + k % 5), put_offset(t, 0);
+            if (shape == 0)
+                nest(t, "[", "]", 1001, "");
+            else if (shape == 1)
+                nest(t, "[", "]", 1000, "{}");
+            else if (shape == 2)
+                nest(t, "[", "]", 999, "{\"\":[]}");
+            else if (shape == 3)
+                nest(t, "[{\"\":", "", 500, "[");
+            else
+                nest(t, "{\"\":", "", 300, ""), nest(t, "[", "", 701, "");
+            return 1;
+        }
+        k -= 5 * 5;
+        if (k < 6 * (sizeof broken / sizeof *broken)) {             /* the failing texts at the rooms 0 to 5 */
+            put_offset(t, k % 6), put_offset(t, 0), put_marked(t, broken[k / 6]);
             return 1;
         }
     } else {
