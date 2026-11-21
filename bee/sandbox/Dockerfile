@@ -1,5 +1,5 @@
 # The sandbox of cjsonRustBee, as an image: what building and checking a leaf needs, and nothing of yours.
-# The same system and the same compilers as the hive's judge uses for this project (the registry's
+# The same system and the same compilers as the hive's judge uses for this project (Bee-ruche/hive's
 # tools/judge/Dockerfile.base with rustc and lld): what builds here builds there.
 #
 #   docker build -t bee-cjson bee/sandbox        (with network; only while `git status --porcelain bee/sandbox` prints nothing)
