@@ -28,16 +28,20 @@ the driver's: it gives a block of exactly the size asked, zeroed, when that size
 original asks is part of what it does: the leaf computes it, fails as the original does when the room is too small,
 and answers the whole block as the original leaves it, the bytes it wrote first (a zero byte among them too, as
 `\u0000` writes one), then its terminating zero, then the zeros the original did not write over, to the block's end.
+(The buffer a leaf answers in is zeroed already: those last zeros are there without writing them; what the leaf must
+get right is the block's length, the size the original asks.)
 
 ## The leaves of buffers
 
-The original reads its input through a buffer: a `parse_buffer`, a `printbuffer` for `update_offset`. Of it, these
-three read the content, its `length` and the `offset`, and move the offset; they read nothing else of it. A buffer is
-given as its offset, two bytes, low byte first, then its content: its length is the count of bytes that follow.
+The original reads its input through a buffer: a `parse_buffer`, a `printbuffer` for `update_offset`. Of it,
+`buffer_skip_whitespace`, `skip_utf8_bom`, `update_offset` and `parse_string` read the content, its `length` and the
+`offset`, and move the offset; they read nothing else of it but `parse_string`'s allocator (above). A buffer is given
+as its offset, two bytes, low byte first, then its content: its length is the count of bytes that follow.
 
 Any offset may be given, at the end of the content or beyond it too, and the answer is then what the original does,
-but in one case: `update_offset` is not called where no zero byte lies at or after the offset (the original would
-read past the buffer's end), and the leaf refuses.
+but in two cases, where the leaf refuses: `update_offset` is not called where no zero byte lies at or after the offset
+(the original would read past the buffer's end), and `parse_string` where no byte lies at the offset (the original
+reads it without a check).
 
 ## The leaves of numbers
 

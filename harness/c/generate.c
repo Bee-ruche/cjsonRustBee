@@ -689,6 +689,7 @@ static void parse_string_case(text *t)
     switch (below(12)) {
     case 0: offset = below(c.length + 1); break;                     /* anywhere (at the end: refused) */
     case 1: offset = c.length + below(3); break;                     /* at the end or beyond: refused */
+    case 2: offset = 256 * (1 + below(255)) + (below(2) ? prefix : below(256)); break;   /* far beyond, the high byte set: refused */
     default: offset = prefix; break;                                 /* at the opening quote */
     }
     put_offset(t, some_room(string_size(c.bytes, c.length, offset)));
