@@ -806,7 +806,7 @@ static long tree_children(text *t, size_t depth, int format, int object, size_t 
     size_t at = t->length, start, count = 0, wanted, inner = depth + 1;
     long printed = object && format ? 2 : 1, each;
     int failed = depth >= NESTING;
-    wanted = chaining ? (below(8) ? 1 : 2) : below(3) ? below(4) : below(4) ? below(12) : below(48);
+    wanted = chaining ? (below(8) ? 1 : 2) : below(3) ? below(4) : below(4) ? below(12) : below(16) ? below(48) : below(400);
     put_two(t, 0);
     start = t->length;
     while (count < wanted && t->length - start < most) {
@@ -847,7 +847,7 @@ static long tree_item(text *t, size_t depth, int format, int named, size_t most)
         type = 1 << below(3), need = 0;                             /* no room for more: false, true or null */
     put(t, type);
     if (named) {
-        size_t longest = below(4) ? 6 : 24;                          /* a name, within what the value leaves */
+        size_t longest = below(4) ? 6 : below(3) ? 24 : most;          /* a name, within what the value leaves */
         name = tree_text(t, longest < most - 3 - need ? longest : most - 3 - need, 1, 0);
     }
     left = most > t->length - begin ? most - (t->length - begin) : 0;
@@ -1469,6 +1469,28 @@ static int special(text *t, const char *leaf, size_t number)
             }
             put_two(t, (size_t)printed_number(d, valueint) + 2), put(t, 0), put(t, 8);
             put_bits(t, bits_of(d)), put_int(t, (unsigned)valueint);
+            return 1;
+        }
+        k -= 80;
+        if (k < 4) {
+            /* an object whose child's name is long: 255, 256, 3000 bytes unformatted, 256 formatted (at the least length:
+               the text, its zero and one more) */
+            static const size_t names[] = {255, 256, 3000, 256};
+            size_t length = names[k];
+            put_two(t, length + (k == 3 ? 13 : 9) + 2), put(t, k == 3), put(t, 64), put_two(t, 1), put(t, 4), put_two(t, length);
+            for (n = 0; n < length; n++)
+                put(t, 'a' + (int)(n % 26));
+            return 1;
+        }
+        k -= 4;
+        if (k < 4) {
+            /* objects of 256 and of 300 children, each « "k": null », both formats, at the least length: their count needs
+               its high byte */
+            size_t count = k < 2 ? 256 : 300;
+            int formatted = (int)(k % 2);
+            put_two(t, (formatted ? 12 * count + 2 : 9 * count + 1) + 2), put(t, formatted), put(t, 64), put_two(t, count);
+            for (n = 0; n < count; n++)
+                put(t, 4), put_two(t, 1), put(t, 'k');
             return 1;
         }
     } else if (!strcmp(leaf, "parse_value")) {

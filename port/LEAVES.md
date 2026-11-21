@@ -75,7 +75,8 @@ a Raw whose `valuestring` is `NULL`, an array or an object entered at the depth 
 value `reference/cJSON.h` gives it: the reference does not change it; the item given is entered at depth 0). The
 length given is at most the buffer the leaf answers in (the section « The buffer », below): every text the original
 prints in it fits there. Every failure is a refusal, of the form or of the original: a leaf may read the form as it
-prints.
+prints. A leaf that goes down one call for each array or object nested in another goes 1000 calls deep:
+the driver runs with the usual stack of 8 MB, so each such call must keep its own locals well under 8 KB.
 
 For `parse_value`, the driver gives the original a root item, zeroed (not counted in the room), and a parse buffer:
 the content, its length, the offset given, the depth 0, and an allocator. The allocator is the driver's: for each of
