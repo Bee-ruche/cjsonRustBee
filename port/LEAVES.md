@@ -59,8 +59,9 @@ item is its `type`, one byte (the field's low byte: `print_value` reads no more 
   (0, 3, 255…): nothing more.
 
 A text is its length (two bytes, low byte first), then its bytes. The length 65535 (`FF FF`) stands for `NULL`, and
-no byte follows it. A field the form does not hold is zero, or `NULL`: the printers do not read it. Only the
-children of an object are named: not the item given, not the children of an array. So `{"a": [true]}` is
+no byte follows it. A field the form does not hold is zero, or `NULL`: the printers do not read it. A String whose
+text is `NULL`, and a `NULL` name, print as the empty string `""`; a Raw whose text is `NULL` is not printed (below).
+Only the children of an object are named: not the item given, not the children of an array. So `{"a": [true]}` is
 `40 01 00`, `20 01 00 61 01 00`, `02`: the object (64, one child); its child, an array (32), named `a` (one byte,
 `61`), with one child; that child, `true` (2), not named.
 
