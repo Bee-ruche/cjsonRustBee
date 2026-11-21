@@ -1048,7 +1048,10 @@ static void parser_string(text *t, size_t most)                        /* a stri
         case 0: put(t, '\\'); put(t, "bfnrt\"\\/"[below(8)]); break;
         case 1: escape(t, (unsigned)below(0xd800)); break;
         case 2: escape(t, 0xd800 + (unsigned)below(0x400)); escape(t, 0xdc00 + (unsigned)below(0x400)); break;
-        case 3: if (below(12) == 0) string_body(t, t->length + 1 + below(6)); else put(t, 128 + (int)below(128)); break;
+        case 3:                                                      /* (string_body runs up to its end: never past what put writes) */
+            if (below(12) == 0) { size_t to = t->length + 1 + below(6); string_body(t, to < LONGEST ? to : LONGEST); }
+            else put(t, 128 + (int)below(128));
+            break;
         default: put(t, plain_byte()); break;
         }
     if (below(40))
@@ -1110,6 +1113,8 @@ static void parse_value_case(text *t)
         put(&content, below(2) ? "],}:x"[below(5)] : (int)below(256));   /* what follows the value: not read */
     if (below(6) == 0)
         spoil(&content, LONGEST - 4);
+    if (content.length > LONGEST - 4)                                /* the room and the offset take 4 of the 3072 bytes */
+        content.length = LONGEST - 4;
     switch (below(12)) {
     case 0: case 1: case 2: room = allocations; break;
     case 3: case 4: room = allocations ? allocations - 1 : 0; break;
