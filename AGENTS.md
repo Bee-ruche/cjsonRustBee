@@ -28,7 +28,7 @@ docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges -
   --mount type=bind,source="$PWD",target=/work,readonly -w /work bee-cjson sh bee/check.sh <leaf>
 ```
 
-On a Linux machine whose own `/usr` holds `cc`, `rustc` and `ld.lld`, `bee/sandbox/sans-docker.sh sh bee/check.sh <leaf>` does the same without Docker ([bee/README.md](bee/README.md)).
+On a Linux machine whose own `/usr` holds `cc`, `rustc` and `ld.lld`, `bee/sandbox/sans-docker.sh sh bee/check.sh <leaf>` does the same without Docker, with every file of the project read-only but the leaves of `port/src/` ([bee/README.md](bee/README.md)).
 
 The check builds the reference and your leaf with the judge's own scripts, draws cases, and compares your leaf's answers with the original's. The judge does the same in its own containers, with cases it draws when it judges, several builds and several runs: a leaf that passes here on luck does not pass there.
 
