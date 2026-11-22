@@ -8,8 +8,9 @@
      the hard paths on purpose (escapes, surrogate pairs whole and broken, texts cut short, comments left open,
      control characters, zero bytes where a leaf refuses them, trees of every kind of item, nested deep, with a
      buffer around the least length the printer takes, JSON texts with the room around the allocations the parser
-     asks for), and the longest answers on purpose too (a text kept whole, a text whose every byte is written as six,
-     two texts of unequal lengths up to the bound).
+     asks for, pairs of trees, the second the first given again, copied, or copied and changed where the comparison
+     turns, trees with the room around the allocations their copy asks for), and the longest answers on purpose too
+     (a text kept whole, a text whose every byte is written as six, two texts of unequal lengths up to the bound).
    The order is drawn too. A wrong leaf that is accepted names a path these cases do not reach: add the case here. */
 #include <float.h>
 #include <stdio.h>
@@ -1230,6 +1231,630 @@ static void exact_midpoint(text *t, size_t which, int above)
         put(t, '1');
 }
 
+/* The functions on whole trees. Their cases read the tree's form back: a form is walked here as the reference's driver
+   reads it (read_item), each item at its type byte, a text at its two bytes of length. */
+static size_t two_at(const unsigned char *p) { return (size_t)p[0] | (size_t)p[1] << 8; }
+
+static unsigned long long bits_at(const unsigned char *p)            /* a double's eight bytes, low byte first */
+{
+    unsigned long long bits = 0;
+    int i;
+    for (i = 7; i >= 0; i--)
+        bits = bits << 8 | p[i];
+    return bits;
+}
+
+/* the end of the text at p; NULL when it runs past `end`, or, when `whole`, when it holds a zero byte (refused) */
+static const unsigned char *text_end(const unsigned char *p, const unsigned char *end, int whole)
+{
+    size_t n;
+    if (p == NULL || end - p < 2)
+        return NULL;
+    n = two_at(p);
+    if (n == NOT_A_TEXT)
+        return p + 2;
+    if ((size_t)(end - p - 2) < n || (whole && memchr(p + 2, 0, n)))
+        return NULL;
+    return p + 2 + n;
+}
+
+/* The comparison's cases: a tree, and beside it a second one made from it: the same item given twice (the original is
+   given one pointer twice), a copy, a copy changed here and there where the answer turns, or another tree. The changes:
+   the order of an object's children; a name's case (equal only when the comparison ignores case, and only for the
+   letters A to Z: « @ » and « ` », « [ » and « { », « é » and « É » differ either way); a name given twice, or NULL; a
+   double a unit or two in the last place away, a zero's sign, a valueint (not compared); a text one byte or one case
+   off (texts are compared with their case); a type changed; a child more or less. The names come often from a few that
+   differ only there. The original's work is counted on each case as the reference would do it (a call, and each child
+   a lookup passes): equal objects nested in each other double it at each level, so a case that would cost more than
+   STEPS is drawn again, smaller; the reference then answers every draw well within its time. */
+enum { STEPS = 300000 };
+
+static const char *const NAMES[] = {"k", "K", "a", "A", "ab", "aB", "Ab", "AB", "", "key", "KEY", "kEy", "@", "`", "[", "{",
+                                    "]", "}", "\\", "|", "^", "~", "_", "\x7f", "\xc3\xa9", "\xc3\x89", "z", "Z"};
+
+static int letter_or_byte(void)                                      /* letters of both cases mostly, then any byte but 0 */
+{
+    return below(3) ? (below(2) ? 'a' : 'A') + (int)below(4) : below(2) ? plain_byte() : 1 + (int)below(255);
+}
+
+/* a name or a String's text of at most `most` bytes (`most` is at least 2): NULL now and then, often one of NAMES,
+   else any bytes; a zero byte once in a while (refused) */
+static void compare_text(text *t, size_t most)
+{
+    size_t at = t->length, n, i;
+    if (below(12) == 0) {
+        put_two(t, NOT_A_TEXT);
+        return;
+    }
+    most -= 2;
+    if (below(3)) {
+        const char *s = NAMES[below(sizeof NAMES / sizeof *NAMES)];
+        if (strlen(s) <= most) {
+            put_two(t, strlen(s));
+            puts_in(t, s);
+            return;
+        }
+    }
+    n = below(3) ? below(9) : below(most + 1);
+    if (n > most)
+        n = most;
+    put_two(t, 0);
+    for (i = 0; i < n; i++)
+        put(t, below(2000) ? letter_or_byte() : 0);
+    set_two(t, at, t->length - at - 2);
+}
+
+/* a double for the comparison: one of a few, close to each other, or any */
+static unsigned long long compared_double(void)
+{
+    static const unsigned long long few[] = {0, SIGN, ONE, ONE + 1, ONE + 2, ONE - 1, TWO, QUIET_NAN, INFINITE, INFINITE | SIGN, 1};
+    return below(3) ? few[below(sizeof few / sizeof *few)] : some_double();
+}
+
+/* one item, its name first when `named`, at most `most` bytes (at least 1, 3 when named) */
+static void compare_item(text *t, int named, size_t most)
+{
+    static const int OTHER[] = {0, 3, 5, 6, 12, 48, 96, 129, 255};
+    size_t pick = below(100), need, start = t->length, left, at, count, wanted, before;
+    int type;
+    if (chaining && most > 16)
+        pick = below(2) ? 62 : 80;
+    type = pick < 5 ? 1 : pick < 10 ? 2 : pick < 15 ? 4 : pick < 32 ? 8 : pick < 48 ? 16 : pick < 53 ? 128 : pick < 71 ? 32
+         : pick < 97 ? 64 : below(2) ? OTHER[below(sizeof OTHER / sizeof *OTHER)] : (int)below(256);
+    need = type == 8 ? 12 : type == 16 || type == 128 || type == 32 || type == 64 ? 2 : 0;
+    if (1 + (named ? 2 : 0) + need > most)
+        type = 1 << below(3), need = 0;                             /* no room for more: false, true or null */
+    put(t, type);
+    if (named)
+        compare_text(t, below(4) && most - 1 - need > 10 ? 10 : most - 1 - need);
+    left = most - (t->length - start);
+    switch (type) {
+    case 8:
+        put_bits(t, compared_double());
+        put_int(t, below(2) ? 1 : (unsigned)next());
+        break;
+    case 16: case 128:
+        compare_text(t, left);
+        break;
+    case 32: case 64:
+        at = t->length;
+        put_two(t, 0);
+        left -= 2;
+        wanted = chaining ? 1 : below(3) ? below(4) : below(4) ? below(12) : below(16) ? below(48) : below(300);
+        for (count = 0; count < wanted && left >= (type == 64 ? 3u : 1u); count++) {
+            size_t share = count + 1 == wanted || chaining ? left : 1 + below(left);
+            if (share < (type == 64 ? 3u : 1u))
+                share = type == 64 ? 3 : 1;
+            before = t->length;
+            compare_item(t, type == 64, share);
+            left -= t->length - before;
+        }
+        set_two(t, at, count);
+        break;
+    default:
+        break;
+    }
+}
+
+static void put_span(text *t, const unsigned char *from, const unsigned char *to)
+{
+    while (from < to)
+        put(t, *from++);
+}
+
+/* the end of the item at p (its name first when named), or NULL when cut short */
+static const unsigned char *item_end(const unsigned char *p, const unsigned char *end, int named)
+{
+    int type;
+    size_t count, i;
+    if (p == NULL || p >= end)
+        return NULL;
+    type = *p++;
+    if (named && (p = text_end(p, end, 0)) == NULL)
+        return NULL;
+    switch (type) {
+    case 8: return end - p < 12 ? NULL : p + 12;
+    case 16: case 128: return text_end(p, end, 0);
+    case 32: case 64:
+        if (end - p < 2)
+            return NULL;
+        count = two_at(p), p += 2;
+        for (i = 0; i < count && p; i++)
+            p = item_end(p, end, type == 64);
+        return p;
+    default: return p;
+    }
+}
+
+/* the k-th child of the children that start at p */
+static const unsigned char *nth_child(const unsigned char *p, const unsigned char *end, int named, size_t k)
+{
+    while (k-- && p)
+        p = item_end(p, end, named);
+    return p;
+}
+
+static size_t changing;                                              /* the copy: 1 item in `changing` changed (0: none) */
+
+/* a text just copied to t at `at`: changed so that it is equal only without case (a letter's case), or never (a byte
+   above 127 one case off, as « é » and « É » are in UTF-8 or in Latin-1; a byte off, a « @ » for a « ` », its end cut,
+   NULL, empty) */
+static void change_text(text *t, size_t at, int letters_only)
+{
+    size_t n, i, from;
+    if (at + 2 > t->length)
+        return;
+    n = two_at(t->bytes + at), from = below(n + 1);
+    if (n != NOT_A_TEXT && at + 2 + n == t->length)
+        for (i = 0; i < n; i++) {
+            unsigned char *c = &t->bytes[at + 2 + (from + i) % n];
+            if (((*c | 32) >= 'a' && (*c | 32) <= 'z') || *c >= 128) {        /* (a byte above 127 too: tolower leaves it) */
+                *c ^= 32;
+                return;
+            }
+        }
+    if (letters_only)
+        return;
+    switch (below(5)) {
+    case 0: t->length = at; put_two(t, NOT_A_TEXT); break;
+    case 1: t->length = at; put_two(t, 0); break;
+    case 2: if (n && n != NOT_A_TEXT && at + 2 + n == t->length && t->bytes[t->length - 1] != 32) t->bytes[t->length - 1] ^= 32; break;   /* a « @ » for a « ` », « [ » for « { »… */
+    case 3: if (n && n != NOT_A_TEXT && at + 2 + n == t->length) t->length--, set_two(t, at, n - 1); break;
+    default: t->length = at; put_two(t, 1); put(t, '@'); break;
+    }
+}
+
+/* the item at p (named: its name first) copied to t, and changed now and then */
+static void compare_copy(text *t, const unsigned char *p, const unsigned char *end, int named)
+{
+    int type = *p, change = changing && below(changing) == 0;
+    const unsigned char *q = p + 1, *after;
+    size_t at, count, put_count, i, skip, extra, rotate, swap;
+    if (change && below(6) == 0) {                                   /* another item in its place, its name kept */
+        static text fresh;
+        fresh.length = 0;
+        compare_item(&fresh, 0, 1 + below(24));
+        put(t, fresh.bytes[0]);
+        if (named)
+            put_span(t, q, text_end(q, end, 0));
+        put_span(t, fresh.bytes + 1, fresh.bytes + fresh.length);
+        return;
+    }
+    if (change && (type == 1 || type == 2 || type == 4) && below(2))
+        type = 1 << below(3);
+    if (change && (type == 16 || type == 128) && below(4) == 0)
+        type ^= 16 | 128;                                            /* a String for a Raw: what it holds is read alike */
+    put(t, type);
+    if (named) {
+        after = text_end(q, end, 0);
+        at = t->length;
+        put_span(t, q, after);
+        if (changing && below(changing) == 0)
+            change_text(t, at, below(2));
+        q = after;
+    }
+    switch (*p) {
+    case 8:
+        at = t->length;
+        put_span(t, q, q + 12);
+        if (change && t->length == at + 12) {
+            unsigned long long bits = 0;
+            for (i = 0; i < 8; i++)
+                bits |= (unsigned long long)t->bytes[at + i] << (8 * i);
+            switch (below(5)) {
+            case 0: bits += 1; break;
+            case 1: bits -= 1; break;
+            case 2: bits += 2; break;
+            case 3: bits ^= SIGN; break;
+            default: t->bytes[at + 8 + below(4)] ^= (unsigned char)(1 + below(255)); break;   /* the valueint alone */
+            }
+            for (i = 0; i < 8; i++)
+                t->bytes[at + i] = (unsigned char)(bits >> (8 * i));
+        }
+        break;
+    case 16: case 128:
+        at = t->length;
+        put_span(t, q, text_end(q, end, 0));
+        if (change)
+            change_text(t, at, 0);
+        break;
+    case 32: case 64:
+        count = two_at(q), q += 2;
+        skip = count, extra = 0, rotate = 0, swap = count;
+        if (change)
+            switch (below(5)) {
+            case 0: if (count) skip = below(count); break;          /* a child less */
+            case 1: extra = 1; break;                                /* a child more: drawn, or one of the others again */
+            case 2: if (count) rotate = below(count); break;        /* the same children in another order */
+            default: if (count > 1) swap = below(count - 1); break; /* two neighbours swapped */
+            }
+        at = t->length;
+        put_two(t, 0);
+        for (i = 0, put_count = 0; i < count; i++) {
+            size_t k = (i + rotate) % count;
+            if (swap < count && (i == swap || i == swap + 1))
+                k = i == swap ? swap + 1 : swap;
+            if (k == skip)
+                continue;
+            compare_copy(t, nth_child(q, end, *p == 64, k), end, *p == 64);
+            put_count++;
+        }
+        if (extra) {
+            const unsigned char *one = count && below(2) ? nth_child(q, end, *p == 64, below(count)) : NULL;
+            if (one && item_end(one, end, *p == 64) - one < 200)
+                put_span(t, one, item_end(one, end, *p == 64));
+            else
+                compare_item(t, *p == 64, 3 + below(20));
+            put_count++;
+        }
+        set_two(t, at, put_count);
+        break;
+    default:
+        break;
+    }
+}
+
+/* The original's work on a case, counted as it would do it; each item's end is noted first, so that a child is passed
+   in one step */
+static const unsigned char *ends[LONGEST + 1], *origin;
+static size_t steps;
+
+/* the end of the item at p (named: its name first), as the reference's driver reads it, or NULL where it refuses (cut
+   short, a zero byte in a text); notes it in `ends` */
+static const unsigned char *mark_ends(const unsigned char *p, const unsigned char *end, int named)
+{
+    const unsigned char *start = p;
+    int type;
+    size_t count, i;
+    if (p >= end)
+        return NULL;
+    type = *p++;
+    if (named && (p = text_end(p, end, 1)) == NULL)
+        return NULL;
+    switch (type) {
+    case 8: p = end - p < 12 ? NULL : p + 12; break;
+    case 16: case 128: p = text_end(p, end, 1); break;
+    case 32: case 64:
+        if (end - p < 2)
+            return NULL;
+        count = two_at(p), p += 2;
+        for (i = 0; i < count && p; i++)
+            p = mark_ends(p, end, type == 64);
+        break;
+    default: break;
+    }
+    if (p)
+        ends[start - origin] = p;
+    return p;
+}
+
+static const unsigned char *payload(const unsigned char *p, int named)    /* past its type byte and its name */
+{
+    p++;
+    return named ? p + (two_at(p) == NOT_A_TEXT ? 2 : 2 + two_at(p)) : p;
+}
+
+static int same_text(const unsigned char *x, const unsigned char *y, int fold)   /* neither NULL */
+{
+    size_t n = two_at(x), i;
+    if (n != two_at(y))
+        return 0;
+    for (i = 0; i < n; i++) {
+        int a = x[2 + i], b = y[2 + i];
+        if (fold && a >= 'A' && a <= 'Z')
+            a += 32;
+        if (fold && b >= 'A' && b <= 'Z')
+            b += 32;
+        if (a != b)
+            return 0;
+    }
+    return 1;
+}
+
+/* get_object_item over the `count` children that start at p: the first named `name`, or NULL */
+static const unsigned char *looked_up(const unsigned char *p, size_t count, const unsigned char *name, int sensitive)
+{
+    size_t i;
+    if (two_at(name) == NOT_A_TEXT)
+        return NULL;
+    for (i = 0; i < count; i++, p = ends[p - origin]) {
+        int null = two_at(p + 1) == NOT_A_TEXT;
+        steps++;
+        if (sensitive ? null || same_text(name, p + 1, 0) : !null && same_text(name, p + 1, 1))
+            return null ? NULL : p;
+    }
+    return NULL;
+}
+
+static int simulated(const unsigned char *a, const unsigned char *b, int named, int sensitive)
+{
+    const unsigned char *pa, *pb, *x, *y;
+    size_t na, nb, i;
+    if (++steps > STEPS || *a != *b)
+        return 0;
+    switch (*a) {
+    case 1: case 2: case 4: case 8: case 16: case 32: case 64: case 128: break;
+    default: return 0;
+    }
+    if (a == b)
+        return 1;
+    pa = payload(a, named), pb = payload(b, named);
+    switch (*a) {
+    case 8: {
+        double da = double_of(bits_at(pa)), db = double_of(bits_at(pb));
+        return magnitude(da - db) <= (magnitude(da) > magnitude(db) ? magnitude(da) : magnitude(db)) * DBL_EPSILON;
+    }
+    case 16: case 128:
+        return two_at(pa) != NOT_A_TEXT && two_at(pb) != NOT_A_TEXT && same_text(pa, pb, 0);
+    case 32:
+        na = two_at(pa), nb = two_at(pb);
+        for (i = 0, x = pa + 2, y = pb + 2; i < na && i < nb; i++, x = ends[x - origin], y = ends[y - origin])
+            if (!simulated(x, y, 0, sensitive))
+                return 0;
+        return na == nb;
+    case 64:
+        na = two_at(pa), nb = two_at(pb);
+        for (i = 0, x = pa + 2; i < na; i++, x = ends[x - origin])
+            if ((y = looked_up(pb + 2, nb, x + 1, sensitive)) == NULL || !simulated(x, y, 1, sensitive))
+                return 0;
+        for (i = 0, y = pb + 2; i < nb; i++, y = ends[y - origin])
+            if ((x = looked_up(pa + 2, na, y + 1, sensitive)) == NULL || !simulated(y, x, 1, sensitive))
+                return 0;
+        return 1;
+    default:
+        return 1;
+    }
+}
+
+/* the original's work on the case in t (the flag, a, then b or nothing); 0 when the driver refuses it */
+static size_t compare_cost(const text *t)
+{
+    const unsigned char *end = t->bytes + t->length, *a = t->bytes + 1, *b;
+    if (t->length < 2)
+        return 0;
+    origin = t->bytes;
+    if ((b = mark_ends(a, end, 0)) == NULL)
+        return 0;
+    if (b == end)
+        b = a;
+    else if (mark_ends(b, end, 0) != end)
+        return 0;
+    steps = 0;
+    simulated(a, b, 0, t->bytes[0] != 0);
+    return steps;
+}
+
+/* a fixed tree for the comparison, written short: n f t (null, false, true); i (1, its int 1), j (1, its int 7), u (a
+   unit in the last place above 1), v (two units above), o (0), O (-0), N (NaN), I (infinity); s ("ab"), A ("AB"), S (a
+   String whose text is NULL), E (""), r (the Raw "ab"), R (a Raw whose text is NULL), z (the Raw ""); x, y, w (the types
+   0, 3, 255: none); [ … ] an array; { … } an object, each child a name then an item; the names: k ("k"), K ("K"), _
+   (NULL), e (""), @ and ` (themselves), a ("ab"), A ("AB"), b ("aB"), u and U (« é » and « É » in UTF-8) */
+static void compare_fixed(text *t, const char **p, int named)
+{
+    static const char *kinds = "nftijuvoONIsASErRzxyw[{", *numbers = "ijuvoONI";
+    static const unsigned char types[] = {4, 1, 2, 8, 8, 8, 8, 8, 8, 8, 8, 16, 16, 16, 16, 128, 128, 128, 0, 3, 255, 32, 64};
+    static const unsigned long long bits[] = {ONE, ONE, ONE + 1, ONE + 2, 0, SIGN, QUIET_NAN, INFINITE};
+    char name = named ? *(*p)++ : 0, kind = *(*p)++;
+    size_t at, count = 0;
+    const char *s;
+    put(t, types[strchr(kinds, kind) - kinds]);
+    if (named) {
+        s = name == 'k' ? "k" : name == 'K' ? "K" : name == 'e' ? "" : name == '@' ? "@" : name == '`' ? "`" : name == 'a' ? "ab"
+          : name == 'A' ? "AB" : name == 'b' ? "aB" : name == 'u' ? "\303\251" : name == 'U' ? "\303\211" : NULL;
+        if (s)
+            put_two(t, strlen(s)), puts_in(t, s);
+        else
+            put_two(t, NOT_A_TEXT);
+    }
+    switch (kind) {
+    case 'i': case 'j': case 'u': case 'v': case 'o': case 'O': case 'N': case 'I':
+        put_bits(t, bits[strchr(numbers, kind) - numbers]);
+        put_int(t, kind == 'j' ? 7 : kind == 'i' || kind == 'u' || kind == 'v' ? 1 : 0);
+        break;
+    case 's': case 'r': put_two(t, 2); puts_in(t, "ab"); break;
+    case 'A': put_two(t, 2); puts_in(t, "AB"); break;
+    case 'S': case 'R': put_two(t, NOT_A_TEXT); break;
+    case 'E': case 'z': put_two(t, 0); break;
+    case '[': case '{':
+        at = t->length;
+        put_two(t, 0);
+        while (**p != ']' && **p != '}')
+            compare_fixed(t, p, kind == '{'), count++;
+        (*p)++;
+        set_two(t, at, count);
+        break;
+    default: break;
+    }
+}
+
+static void compare_case(text *t)
+{
+    static text first;
+    size_t most = below(4) ? 1 + below(96) : below(4) ? 1 + below(600) : 1 + below(LONGEST - 1), attempt, mode;
+    for (attempt = 0; attempt < 8; attempt++, most = most / 2 + 1) {
+        t->length = 0, first.length = 0;
+        mode = below(16);
+        chaining = below(12) == 0;
+        compare_item(&first, 0, mode < 2 ? most : most / 2 + 1);
+        chaining = 0;
+        put(t, below(2) ? 0 : below(8) ? 1 : 2 + (int)below(254));
+        put_span(t, first.bytes, first.bytes + first.length);
+        if (mode == 2) {                                             /* another tree */
+            chaining = below(12) == 0;
+            compare_item(t, 0, 1 + below(LONGEST - t->length));
+            chaining = 0;
+        } else if (mode >= 3) {                                      /* a copy: as it is, changed a little, or much */
+            changing = mode < 7 ? 0 : mode < 13 ? 10 + below(50) : 2 + below(6);
+            compare_copy(t, first.bytes, first.bytes + first.length, 0);
+            changing = 0;
+        }                                                            /* (0 and 1: b is a itself) */
+        switch (below(40)) {
+        case 0: t->length = below(t->length + 1); break;             /* cut short: refused, or b is a itself */
+        case 1: put(t, (int)below(256)); break;                      /* a byte after: refused */
+        case 2: if (t->length > 1) t->bytes[1 + below(t->length - 1)] = (unsigned char)below(256); break;   /* a byte changed */
+        default: break;
+        }
+        if (compare_cost(t) <= STEPS)
+            return;
+    }
+    t->length = first.length + 1;                                    /* (never in practice: b is a itself, one step) */
+}
+
+/* The copy's cases: a tree whose item is named, the flag recurse, and the room around the allocations the original asks
+   for to copy it (an item, its valuestring and its name when they are not NULL, for the item and, with recurse, for
+   each of its children, whole) */
+static size_t copies(const unsigned char *p, const unsigned char *end, int named, int recurse, const unsigned char **after)
+{
+    size_t n = 1, count, i, each;
+    int type;
+    *after = NULL;
+    if (p >= end)
+        return 0;
+    type = *p++;
+    if (named) {
+        if (end - p >= 2 && two_at(p) != NOT_A_TEXT)
+            n++;
+        if ((p = text_end(p, end, 0)) == NULL)
+            return n;
+    }
+    switch (type) {
+    case 8: p = end - p < 12 ? NULL : p + 12; break;
+    case 16: case 128:
+        if (end - p >= 2 && two_at(p) != NOT_A_TEXT)
+            n++;
+        p = text_end(p, end, 0);
+        break;
+    case 32: case 64:
+        if (end - p < 2)
+            return n;
+        count = two_at(p), p += 2;
+        for (i = 0; i < count && p; i++) {
+            each = copies(p, end, type == 64, 1, &p);
+            if (recurse)
+                n += each;
+        }
+        break;
+    default: break;
+    }
+    *after = p;
+    return n;
+}
+
+static size_t copy_room(size_t allocations)
+{
+    switch (below(12)) {
+    case 0: case 1: case 2: return allocations;
+    case 3: case 4: return allocations ? allocations - 1 : 0;
+    case 5: return allocations > 1 ? allocations - 2 : 0;
+    case 6: return allocations + 1;
+    case 7: return below(allocations + 1);
+    case 8: return 0;
+    default: return 65535;
+    }
+}
+
+static void duplicate_case(text *t)
+{
+    static text tree;
+    const unsigned char *after;
+    size_t most, allocations, room, n;
+    int recurse = below(4) ? 1 : below(2) ? 0 : 2 + (int)below(254);
+    tree.length = 0;
+    chaining = below(12) == 0;
+    most = below(4) ? 3 + below(96) : below(4) ? 3 + below(600) : 3 + below(LONGEST - 6);   /* (the leaf's bound: 3072 bytes, the room and the flag included) */
+    tree_item(&tree, 0, 0, 1, most);
+    chaining = 0;
+    allocations = copies(tree.bytes, tree.bytes + tree.length, 1, recurse != 0, &after);
+    room = copy_room(allocations);
+    put_two(t, room);
+    put(t, recurse);
+    for (n = 0; n < tree.length; n++)
+        put(t, tree.bytes[n]);
+    switch (below(40)) {
+    case 0: t->length = 3 + below(tree.length); break;               /* the item cut short: refused */
+    case 1: put(t, (int)below(256)); break;                          /* a byte after it: refused */
+    case 2: if (tree.length) t->bytes[3 + below(tree.length)] = (unsigned char)below(256); break;   /* a byte changed: anything */
+    default: break;
+    }
+}
+
+/* The whole parse's cases: the parser's JSON texts (above), with what cJSON_ParseWithLengthOpts reads around the value:
+   blanks before it (every byte up to 32, zeros too), the UTF-8 mark (skipped once, at the start, when the text is 5
+   bytes long or more), and after it blanks, zero bytes and what follows them, read only with require_null_terminated;
+   the room around the allocations the parse asks for, the root's first */
+static void parse_with_length_opts_case(text *t)
+{
+    static text content;
+    size_t most, allocations = 1, room, i;
+    content.length = 0;
+    switch (below(12)) {
+    case 0: case 1:
+        for (i = 1 + below(4); i--; )
+            put(&content, below(3) ? " \t\n\r"[below(4)] : (int)below(33));
+        break;
+    case 2:
+        puts_in(&content, "\xEF\xBB\xBF");
+        if (below(3) == 0)
+            json_space(&content);
+        break;
+    case 3: puts_in(&content, below(3) == 0 ? "\xEF\xBB\xBF\xEF\xBB\xBF" : below(2) ? "\xEF\xBB" : " \xEF\xBB\xBF"); break;
+    default: break;
+    }
+    chaining = below(12) == 0;
+    stopping = below(16) == 0;
+    most = below(4) ? 1 + below(96) : below(4) ? 1 + below(600) : 1 + below(LONGEST - 12);
+    if (below(24) == 0)
+        dense_array(&content, &allocations);
+    else
+        json_value(&content, 0, most, &allocations);
+    chaining = 0, stopping = 0;
+    switch (below(12)) {                                             /* what follows the value: read with require_null_terminated alone */
+    case 0: json_space(&content); break;
+    case 1: case 2: put(&content, 0); break;
+    case 3: case 4: json_space(&content); put(&content, 0); if (below(2)) put(&content, below(2) ? 0 : (int)below(256)); break;
+    case 5: put(&content, 0); put(&content, "x1 ]"[below(4)]); break;
+    case 6: put(&content, below(2) ? "],}:x"[below(5)] : (int)below(256)); break;
+    case 7: json_space(&content); put(&content, "x1 \"["[below(5)]); break;
+    default: break;
+    }
+    if (below(6) == 0)
+        spoil(&content, LONGEST - 3);
+    if (content.length > LONGEST - 3)                                /* the room and the flag take 3 of the 3072 bytes */
+        content.length = LONGEST - 3;
+    switch (below(12)) {
+    case 0: case 1: case 2: case 3: room = allocations; break;
+    case 4: room = allocations - 1; break;
+    case 5: room = allocations + 1 + below(2); break;
+    case 6: case 7: room = below(allocations + 1); break;
+    case 8: room = below(2); break;
+    default: room = 65535; break;
+    }
+    put_offset(t, room > 65535 ? 65535 : room);
+    put(t, below(2) ? 0 : below(8) ? 1 : 2 + (int)below(254));
+    for (i = 0; i < content.length; i++)
+        put(t, content.bytes[i]);
+}
+
 /* compare_double's fixed pairs, a then b, as patterns. The original says equal when |a - b| <= max(|a|, |b|)·DBL_EPSILON:
    around 1 and 2, the pairs a unit in the last place inside that bound, outside it, and on it (<=, not <); the
    infinities (an infinity is equal to every finite double and to the other infinity, not to itself: inf - inf is NaN);
@@ -1833,6 +2458,314 @@ static int special(text *t, const char *leaf, size_t number)
             put_offset(t, k % 6), put_offset(t, 0), put_marked(t, broken[k / 6]);
             return 1;
         }
+    } else if (!strcmp(leaf, "compare")) {
+        /* every type byte alone, given twice (one pointer) and as a copy; pairs of small trees, each with case_sensitive 0
+           and 1: the literals; doubles beside each other (a unit in the last place is equal, two are not), the zeros, NaN
+           and an infinity (equal to nothing, but given twice); valueints (not compared); texts NULL, empty, of another case
+           (Strings and Raws compare their case); the invalid types (false, given twice too); arrays of other lengths;
+           objects in another order; names of another case (equal only without case), « @ » and « ` »; a name given twice;
+           NULL names (false, but given twice); one object a part of the other, both ways; the flag as bytes other than 1;
+           arrays 510 deep, equal and differing at the bottom, and 1020 deep given twice; equal objects 14 deep (each level
+           doubles the original's work), objects 250 deep differing at the bottom, 500 deep given twice; objects of 300
+           children in reverse order; names of 1500 bytes differing at their end; forms refused */
+        static const char *pairs[][2] = {
+            {"n", "n"}, {"n", 0}, {"n", "f"}, {"f", "f"}, {"t", "t"}, {"f", "t"}, {"t", "n"},
+            {"i", "i"}, {"i", "j"}, {"i", "u"}, {"u", "i"}, {"i", "v"}, {"v", "i"}, {"u", "v"}, {"o", "O"}, {"O", "o"}, {"o", "i"},
+            {"N", "N"}, {"N", 0}, {"I", "I"}, {"I", 0}, {"N", "i"}, {"I", "i"}, {"i", "I"},
+            {"s", "s"}, {"s", "A"}, {"A", "s"}, {"s", "r"}, {"r", "r"}, {"r", "s"}, {"S", "S"}, {"S", 0}, {"S", "E"}, {"E", "S"},
+            {"E", "E"}, {"E", "z"}, {"z", "z"}, {"R", "R"}, {"R", 0}, {"s", "S"}, {"S", "s"}, {"z", "R"},
+            {"x", "x"}, {"x", 0}, {"y", "y"}, {"y", 0}, {"w", "w"}, {"w", 0}, {"x", "y"}, {"x", "n"},
+            {"[]", "[]"}, {"{}", "{}"}, {"[]", "{}"}, {"{}", "[]"}, {"[]", 0}, {"{}", 0}, {"[n]", "[n]"}, {"[n]", "[]"}, {"[]", "[n]"},
+            {"[nf]", "[fn]"}, {"[nf]", "[nf]"}, {"[is]", "[js]"}, {"[iv]", "[ii]"}, {"[x]", "[x]"}, {"[x]", 0}, {"[S]", "[S]"},
+            {"[S]", 0}, {"[N]", "[N]"}, {"[[]]", "[[]]"}, {"[[n]]", "[[f]]"}, {"[[n][]]", "[[n][]]"}, {"[[n][]]", "[[][n]]"},
+            {"{kn}", "{kn}"}, {"{kn}", "{Kn}"}, {"{Kn}", "{kn}"}, {"{kn}", "{kf}"}, {"{knKt}", "{Ktkn}"}, {"{Ktkn}", "{knKt}"},
+            {"{knKt}", "{knKt}"}, {"{knKn}", "{Knkn}"}, {"{kn}", "{knkn}"}, {"{knkn}", "{kn}"}, {"{kn}", "{knkt}"},
+            {"{knkt}", "{kn}"}, {"{knkt}", "{knkt}"}, {"{knkt}", 0}, {"{knKf}", "{kn}"}, {"{kn}", "{knKf}"},
+            {"{_n}", "{_n}"}, {"{_n}", 0}, {"{_n}", "{kn}"}, {"{kn}", "{_n}"}, {"{kn}", "{_nkn}"}, {"{_nkn}", "{kn}"},
+            {"{kn}", "{kn_n}"}, {"{kn_n}", 0}, {"{en}", "{en}"}, {"{en}", "{_n}"}, {"{@n}", "{`n}"}, {"{`n}", "{@n}"},
+            {"{@n}", "{@n}"}, {"{an}", "{An}"}, {"{an}", "{bn}"}, {"{An}", "{bn}"}, {"{an}", "{an}"},
+            {"{k{kn}}", "{k{Kn}}"}, {"{k{kn}}", "{K{kn}}"}, {"{k[n]}", "{k[n]}"}, {"{k[n]}", "{k[f]}"}, {"{k{_n}}", 0},
+            {"[{_n}]", 0}, {"[{_n}]", "[{_n}]"}, {"{k[x]}", "{k[x]}"}, {"{kS}", "{kS}"}, {"{kN}", "{kN}"}, {"{kn}", "[n]"},
+            {"[n]", "{kn}"}, {"{kv}", "{ki}"}, {"{kj}", "{ki}"}, {"{ks}", "{kA}"}, {"{ks}", "{Ks}"}, {"{ksKA}", "{KAks}"},
+            {"{ksKA}", "{Ksks}"}, {"[{kn}{Kf}]", "[{Kn}{kf}]"}, {"[{kn}{Kf}]", "[{kf}{Kn}]"}, {"{k{knKt}}", "{k{Ktkn}}"},
+            {"{k{knKt}}", "{K{Ktkn}}"}, {"{kx}", "{kx}"}, {"{kx}", 0}, {"{knkx}", "{kn}"}, {"{kn}", "{knkx}"},
+            {"{un}", "{Un}"}, {"{Un}", "{un}"}, {"{un}", "{un}"}, {"{us}", "{Us}"}};
+        static const int flags[] = {2, 128, 255};
+        size_t k = number, n, m;
+        const char *p;
+        if (k < 512) {
+            int type = (int)(k / 2);
+            put(t, 1);
+            for (n = 0; n < 1 + k % 2; n++) {                        /* a; then, for an odd k, a copy of it */
+                put(t, type);
+                switch (type) {
+                case 8: put_bits(t, bits_of(1.5)); put_int(t, 1); break;
+                case 16: case 128: put_two(t, 2); puts_in(t, "a\n"); break;
+                case 32: put_two(t, 1); put(t, 4); break;
+                case 64: put_two(t, 1); put(t, 2); put_two(t, 1); put(t, 'k'); break;
+                default: break;
+                }
+            }
+            return 1;
+        }
+        k -= 512;
+        if (k < 2 * (sizeof pairs / sizeof *pairs)) {
+            put(t, (int)(k % 2));
+            p = pairs[k / 2][0], compare_fixed(t, &p, 0);
+            if (pairs[k / 2][1])
+                p = pairs[k / 2][1], compare_fixed(t, &p, 0);
+            return 1;
+        }
+        k -= 2 * (sizeof pairs / sizeof *pairs);
+        if (k < 9) {                                                 /* case_sensitive as bytes other than 1: true */
+            static const char *few[][2] = {{"{kn}", "{Kn}"}, {"{knKt}", "{Ktkn}"}, {"{an}", "{An}"}};
+            put(t, flags[k % 3]);
+            p = few[k / 3][0], compare_fixed(t, &p, 0);
+            p = few[k / 3][1], compare_fixed(t, &p, 0);
+            return 1;
+        }
+        k -= 9;
+        if (k < 3) {                                                 /* arrays 510 deep, equal, then null against false at the bottom; 1020 deep, given twice */
+            put(t, 1);
+            for (m = 0; m < (k == 2 ? 1u : 2u); m++) {
+                for (n = 0; n < (k == 2 ? 1020u : 510u); n++)
+                    put(t, 32), put_two(t, 1);
+                put(t, k == 1 && m == 1 ? 1 : 4);
+            }
+            return 1;
+        }
+        k -= 3;
+        if (k < 6) {
+            /* objects nested, each the one child « k » of the one above: 14 deep, equal (and « K » in b, without case:
+               equal); 250 deep, null against false at the bottom; 500 deep, given twice */
+            size_t levels = k < 4 ? 14 : k == 4 ? 250 : 500;
+            put(t, k < 4 ? (int)(k % 2) : 1);
+            for (m = 0; m < (k == 5 ? 1u : 2u); m++) {
+                put(t, 64), put_two(t, 1);
+                for (n = 1; n < levels; n++)
+                    put(t, 64), put_two(t, 1), put(t, k >= 2 && k < 4 && m ? 'K' : 'k'), put_two(t, 1);
+                put(t, k == 4 && m ? 1 : 4), put_two(t, 1), put(t, 'k');
+            }
+            return 1;
+        }
+        k -= 6;
+        if (k < 4) {
+            /* objects of 300 children, b's in reverse order; then one of b's names in capitals: equal only without case */
+            put(t, (int)(k % 2));
+            for (m = 0; m < 2; m++) {
+                put(t, 64), put_two(t, 300);
+                for (n = 0; n < 300; n++) {
+                    size_t which = m ? 299 - n : n;
+                    int capital = k >= 2 && m && which == 150 ? 'A' - 'a' : 0;
+                    put(t, 4), put_two(t, 2), put(t, 'a' + capital + (int)(which / 26)), put(t, 'a' + capital + (int)(which % 26));
+                }
+            }
+            return 1;
+        }
+        k -= 4;
+        if (k < 4) {
+            /* one child named by 1500 bytes: the last a « b » against a « B » (equal only without case), a « @ » against
+               a « ` », one byte less */
+            put(t, k == 1 ? 1 : 0);
+            for (m = 0; m < 2; m++) {
+                size_t length = k == 3 && m ? 1499 : 1500;
+                put(t, 64), put_two(t, 1), put(t, 4), put_two(t, length);
+                for (n = 0; n + 1 < length; n++)
+                    put(t, 'a' + (int)(n % 26));
+                put(t, k < 2 ? (m ? 'B' : 'b') : k == 2 ? (m ? '`' : '@') : 'z');
+            }
+            return 1;
+        }
+        k -= 4;
+        switch (k) {                                                 /* refused, but for 8 and 9 */
+        case 0: return 1;                                            /* nothing */
+        case 1: put(t, 1); return 1;                                 /* the flag alone */
+        case 2: put(t, 1); put(t, 16); put_two(t, 5); puts_in(t, "abc"); return 1;
+        case 3: put(t, 1); put(t, 16); put_two(t, 3); put(t, 'a'); put(t, 0); put(t, 'b'); return 1;
+        case 4: put(t, 1); put(t, 4); put(t, 4); put(t, 4); return 1;   /* a byte after b */
+        case 5: put(t, 1); put(t, 32); put_two(t, 2); put(t, 4); return 1;
+        case 6: put(t, 1); put(t, 4); put(t, 16); put_two(t, 2); put(t, 'a'); return 1;
+        case 7: put(t, 0); put(t, 64); put_two(t, 1); put(t, 4); put_two(t, 2); put(t, 'k'); put(t, 0); return 1;
+        case 8: put(t, 1); put(t, 4); return 1;                      /* null, given twice: equal */
+        case 9: put(t, 0); put(t, 0); return 1;                      /* the type 0, given twice: not equal */
+        default: break;
+        }
+    } else if (!strcmp(leaf, "duplicate")) {
+        /* every type byte, named « k » at the room it needs, and named « » (a block of one byte) one short of it; small trees
+           written short (as for the printer: n f t i d s S E c r z R x y, [ ] and { }; the names k, K (NULL), e (""), q), the
+           item given named too, with recurse 0 and 1, at the rooms 0, one short, the room needed and 65535; recurse as bytes
+           other than 1; arrays nested 1000 deep, at the room they need and one short, with and without recurse; objects of 300
+           children; a name and a String of 3000 bytes; forms refused */
+        static const char *trees[] = {"kn", "Kn", "en", "ks", "kS", "KS", "kE", "eE", "kr", "kR", "kz", "ki", "kd", "kx", "Ky",
+                                      "k[]", "K{}", "k[nS]", "k{kn}", "k{Kn}", "e{ksKS}", "K[[s]]", "k{k{k[i]}}", "e{e[]Ks}",
+                                      "q[rRzE]", "K{K{}e[]}", "k[{kn}{Kf}]"};
+        static const int flags[] = {2, 128, 255};
+        const unsigned char *after;
+        const char *p;
+        size_t k = number, n, needed;
+        if (k < 512) {
+            int type = (int)(k / 2);
+            put_two(t, 0), put(t, 1), put(t, type);
+            if (k % 2)
+                put_two(t, 0);
+            else
+                put_two(t, 1), put(t, 'k');
+            switch (type) {
+            case 8: put_bits(t, bits_of(1.5)); put_int(t, 1); break;
+            case 16: case 128: put_two(t, 2); puts_in(t, "a\n"); break;
+            case 32: put_two(t, 1); put(t, 4); break;
+            case 64: put_two(t, 1); put(t, 2); put_two(t, NOT_A_TEXT); break;
+            default: break;
+            }
+            needed = copies(t->bytes + 3, t->bytes + t->length, 1, 1, &after);
+            set_two(t, 0, k % 2 ? needed - 1 : needed);
+            return 1;
+        }
+        k -= 512;
+        if (k < 8 * (sizeof trees / sizeof *trees)) {
+            int recurse = (int)(k / 4 % 2);
+            p = trees[k / 8];
+            put_two(t, 0), put(t, recurse);
+            fixed_tree(t, &p, 0, 0, 1);
+            needed = copies(t->bytes + 3, t->bytes + t->length, 1, recurse, &after);
+            switch (k % 4) {
+            case 0: set_two(t, 0, 0); break;
+            case 1: set_two(t, 0, needed - 1); break;
+            case 2: set_two(t, 0, needed); break;
+            default: set_two(t, 0, 65535); break;
+            }
+            return 1;
+        }
+        k -= 8 * (sizeof trees / sizeof *trees);
+        if (k < 3) {
+            p = "k{ksK[nE]}";
+            put_two(t, 0), put(t, flags[k]);
+            fixed_tree(t, &p, 0, 0, 1);
+            set_two(t, 0, copies(t->bytes + 3, t->bytes + t->length, 1, 1, &after));
+            return 1;
+        }
+        k -= 3;
+        if (k < 4) {                                                 /* 1000 arrays nested, the item named « k »: the room needed and one short, with recurse and without */
+            put_two(t, 0), put(t, k < 2), put(t, 32), put_two(t, 1), put(t, 'k'), put_two(t, 1);
+            for (n = 1; n < 1000; n++)
+                put(t, 32), put_two(t, 1);
+            put(t, 4);
+            needed = copies(t->bytes + 3, t->bytes + t->length, 1, k < 2, &after);
+            set_two(t, 0, k % 2 ? needed - 1 : needed);
+            return 1;
+        }
+        k -= 4;
+        if (k < 2) {                                                 /* an object of 300 children « "k": null »: 602 allocations, the room needed and one short */
+            put_two(t, 0), put(t, 1), put(t, 64), put_two(t, 1), put(t, 'k'), put_two(t, 300);
+            for (n = 0; n < 300; n++)
+                put(t, 4), put_two(t, 1), put(t, 'k');
+            needed = copies(t->bytes + 3, t->bytes + t->length, 1, 1, &after);
+            set_two(t, 0, k ? needed - 1 : needed);
+            return 1;
+        }
+        k -= 2;
+        if (k < 4) {                                                 /* a name of 3000 bytes on a null; a String of 3000 bytes, its item not named: the room needed and one short */
+            put_two(t, k % 2 ? 1 : 2), put(t, 1), put(t, k < 2 ? 4 : 16);
+            if (k >= 2)
+                put_two(t, NOT_A_TEXT);
+            put_two(t, 3000);
+            for (n = 0; n < 3000; n++)
+                put(t, 'a' + (int)(n % 26));
+            return 1;
+        }
+        k -= 4;
+        switch (k) {                                                 /* refused */
+        case 0: return 1;
+        case 1: put(t, 9); return 1;
+        case 2: put_two(t, 9); return 1;
+        case 3: put_two(t, 9); put(t, 1); return 1;                  /* no item */
+        case 4: put_two(t, 9); put(t, 1); put(t, 16); put_two(t, 1); put(t, 'k'); put_two(t, 4); puts_in(t, "ab"); return 1;
+        case 5: put_two(t, 9); put(t, 1); put(t, 4); put_two(t, 3); put(t, 'a'); put(t, 0); put(t, 'b'); return 1;
+        case 6: put_two(t, 9); put(t, 1); put(t, 16); put_two(t, NOT_A_TEXT); put_two(t, 2); put(t, 0); put(t, 'b'); return 1;
+        case 7: put_two(t, 9); put(t, 1); put(t, 4); put_two(t, 1); put(t, 'k'); put(t, 4); return 1;   /* a byte after the item */
+        case 8: put_two(t, 9); put(t, 1); put(t, 32); put_two(t, NOT_A_TEXT); put_two(t, 2); put(t, 4); return 1;
+        case 9: put_two(t, 9); put(t, 1); put(t, 64); put_two(t, NOT_A_TEXT); put_two(t, 1); put(t, 4); return 1;   /* a child without its name */
+        default: break;
+        }
+    } else if (!strcmp(leaf, "parse_with_length_opts")) {
+        /* each text below with require_null_terminated 0 and 1, the room 65535: the empty text, blanks alone, zero bytes
+           alone, what follows a value (blanks, zeros, a zero then a byte, a byte), the UTF-8 mark (skipped at the start
+           only, once, and only when the text is 5 bytes long or more), blanks and zeros before the value; the flag as bytes
+           other than 1; the room from 0 to one more than two texts need (the root's item first); the deep ones at the rooms
+           around what they ask before the 1001st container fails; nesting at the limit and past it; the longest text; an
+           answer longer than the answer's buffer (marked: ` stands for a zero byte) */
+        static const char *texts[] = {
+            "", " ", "  ", "`", "```", " \t\r\n", "1", "1`", "1``", "1`x", "1 ", "1 `", "1` ", "1 2", "1`2", " 1", "`1",
+            "`` 1 ``", "[1] x", "[1]`x", "[1]`", "[1] `", "[1]  ", "{}", "{} `", "\"ab\"`", "\"a`b\"", "{\"a`b\":1}`", "nul",
+            "null", "null`", "[", "[ ", "[1,", "{\"a\":", "\xEF\xBB\xBF", "\xEF\xBB\xBF" "1", "\xEF\xBB\xBF" "1 ", "\xEF\xBB\xBF" "1`",
+            "\xEF\xBB\xBF 1", "\xEF\xBB\xBF" "12", "\xEF\xBB\xBF[]", "\xEF\xBB\xBF{}`", "\xEF\xBB\xBF\xEF\xBB\xBF" "1 ",
+            " \xEF\xBB\xBF" "1  ", "\xEF\xBB" "1  ", "\xEF\xBB\xBF`1`", "\xEF\xBB\xBF ", "\xEF\xBB\xBF  ", "\xEF\xBB\xBF`",
+            "-", "-1`", "[]]", "1x", "\"", "0`", "1e5 `x", "[1,2] ` ", "{\"a\":[true,false,null]}`", "\"%d800\"`"};
+        static const struct { size_t arrays; const char *inner; } deep[] = {{1000, ""}, {1001, ""}, {999, "{\"\":[]}"}, {1000, "{}"}};
+        static const size_t need[] = {1001, 1001, 1002, 1501, 1301};     /* (parse_value's, and the root's item) */
+        static const int flags[] = {2, 128, 255};
+        size_t k = number, n;
+        if (k < 2 * (sizeof texts / sizeof *texts)) {
+            put_offset(t, 65535), put(t, (int)(k % 2)), put_marked(t, texts[k / 2]);
+            return 1;
+        }
+        k -= 2 * (sizeof texts / sizeof *texts);
+        if (k < 6) {
+            put_offset(t, 65535), put(t, flags[k % 3]), put_marked(t, k < 3 ? "1`" : "1 x");
+            return 1;
+        }
+        k -= 6;
+        if (k < 13 + 10) {                                           /* (the first needs 11 allocations, the second 8) */
+            put_offset(t, k < 13 ? k : k - 13), put(t, k >= 13);
+            puts_in(t, k < 13 ? "{\"a\":[1,\"x\",{\"b\":2}]}" : " [\"ab\",-1.5,{\"\":[]}] ");
+            if (k >= 13)
+                put(t, 0);                                           /* (a zero after the blanks: the flag finds it) */
+            return 1;
+        }
+        k -= 13 + 10;
+        if (k < 5 * 5) {
+            size_t shape = k / 5;
+            put_offset(t, need[shape] - 2 + k % 5), put(t, (int)(k % 2));
+            if (shape == 0)
+                nest(t, "[", "]", 1001, "");
+            else if (shape == 1)
+                nest(t, "[", "]", 1000, "{}");
+            else if (shape == 2)
+                nest(t, "[", "]", 999, "{\"\":[]}");
+            else if (shape == 3)
+                nest(t, "[{\"\":", "", 500, "[");
+            else
+                nest(t, "{\"\":", "", 300, ""), nest(t, "[", "", 701, "");
+            return 1;
+        }
+        k -= 5 * 5;
+        if (k < 2 * (sizeof deep / sizeof *deep)) {
+            put_offset(t, 65535), put(t, (int)(k % 2));
+            nest(t, "[", "]", deep[k / 2].arrays, deep[k / 2].inner);
+            return 1;
+        }
+        k -= 2 * (sizeof deep / sizeof *deep);
+        if (k < 4) {                                                 /* the longest: a string of 3067 bytes, then a zero for the flag; 1532 ones (an answer too long: refused) */
+            put_offset(t, 65535), put(t, (int)(k % 2));
+            if (k < 2) {
+                put(t, '"');
+                for (n = 0; n < 3065; n++)
+                    put(t, 'a' + (int)(n % 26));
+                put(t, '"'), put(t, 0);
+            } else {
+                put(t, '[');
+                for (n = 0; n < 1532; n++)
+                    puts_in(t, n ? ",1" : "1");
+                put(t, ']');
+            }
+            return 1;
+        }
+        k -= 4;
+        if (k < 3) {                                                 /* too short: refused */
+            for (n = 0; n < k; n++)
+                put(t, 0);
+            return 1;
+        }
     } else {
         /* two texts of 31 bytes: equal but for their case (0); then differing at their last byte only, both ways;
            then one a prefix of the other; then the shapes that are refused */
@@ -1933,6 +2866,9 @@ int main(int argc, char **argv)
     else if (!strcmp(argv[1], "strdup")) draw = strdup_case, bound = 256;
     else if (!strcmp(argv[1], "print_value")) draw = print_value_case, bound = 3072;
     else if (!strcmp(argv[1], "parse_value")) draw = parse_value_case, bound = 3072;
+    else if (!strcmp(argv[1], "parse_with_length_opts")) draw = parse_with_length_opts_case, bound = 3072;
+    else if (!strcmp(argv[1], "compare")) draw = compare_case, bound = 3072;
+    else if (!strcmp(argv[1], "duplicate")) draw = duplicate_case, bound = 3072;
     else return 2;
     if (!fgets(seed, sizeof seed, stdin) || strlen(seed) < 32)
         return 2;

@@ -87,3 +87,18 @@ pub const ANSWER: Leaf = print_value::answer;
 pub mod parse_value;
 #[cfg(unit = "parse_value")]
 pub const ANSWER: Leaf = parse_value::answer;
+
+#[cfg(unit = "parse_with_length_opts")]
+pub mod parse_with_length_opts;
+#[cfg(unit = "parse_with_length_opts")]
+pub const ANSWER: Leaf = parse_with_length_opts::answer;
+
+#[cfg(unit = "compare")]
+pub mod compare;
+#[cfg(unit = "compare")]
+pub const ANSWER: Leaf = compare::answer;
+
+#[cfg(unit = "duplicate")]
+pub mod duplicate;
+#[cfg(unit = "duplicate")]
+pub const ANSWER: Leaf = duplicate::answer;
