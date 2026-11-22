@@ -48,6 +48,9 @@ fixture() {
   echo "int reference;" >"$repo/reference/cJSON.c"; echo "int generate;" >"$repo/harness/c/generate.c"
   echo '{"project": "fixture"}' >"$repo/hive/project.json"; echo "# readme" >"$repo/README.md"; echo "the licence" >"$repo/LICENSE"
   echo "/target/" >"$repo/.gitignore"
+  # The port's frame, its blank leaf and its list of leaves (guarded), beside a leaf (a worker's): several guarded paths in one folder.
+  mkdir -p "$repo/port/src"; echo "// the frame" >"$repo/port/src/lib.rs"; echo "// blank" >"$repo/port/blank.rs"
+  echo "# leaves" >"$repo/port/LEAVES.md"; echo "// a leaf" >"$repo/port/src/hex4.rs"
   ln -s "$outside/target.txt" "$repo/link-to-file"; ln -s "$outside/dir" "$repo/link-to-dir"
   ln -s ../registre/tools/hive/hive.py "$repo/link-to-sibling"
   cat >"$repo/attack.py" <<'EOF'
@@ -194,6 +197,10 @@ verdict b21 "nor removed, nor renamed" "$([ "$rc" -ne 0 ] && [ "$(protected)" = 
 [ ! -e "$repo/reference-moved" ] || mv -T "$repo/reference-moved" "$repo/reference"; [ ! -e "$repo/README-moved" ] || mv -T "$repo/README-moved" "$repo/README.md"   # put the fixture back
 inside 'printf "* -text\n" >.gitattributes'
 verdict b22 "a .gitattributes created where there was none is not there afterwards, and the launcher says so" "$([ ! -e "$repo/.gitattributes" ] && grep -q "created .gitattributes: set aside" <<<"$out"; echo $?)" "rc $rc; on the host: $(cd "$repo" && ls -d .gitattributes* 2>/dev/null | tr '\n' ' ')"
+frame() { (cd "$repo" && tar -cf - port/src/lib.rs port/blank.rs port/LEAVES.md 2>/dev/null | sha256sum); }
+frame_before=$(frame)
+inside 'echo x >>port/src/lib.rs; echo x >>port/blank.rs; echo x >>port/LEAVES.md; rm -f port/blank.rs port/LEAVES.md; mv port port-moved; echo "// written" >>port/src/hex4.rs && echo "// new" >port/src/new_leaf.rs'
+verdict b23 "the port's frame, blank leaf and list of leaves (three guarded paths in one folder) stay read-only, and a leaf beside them is the command's to write" "$([ "$(frame)" = "$frame_before" ] && grep -q written "$repo/port/src/hex4.rs" && [ -f "$repo/port/src/new_leaf.rs" ]; echo $?)" "rc $rc; port/ on the host: $(cd "$repo" && ls -A port port/src | tr '\n' ' ')"
 inside 'mkdir .claude && echo "{\"hooks\": {}}" >.claude/settings.json; echo "{}" >.mcp.json'
 verdict b15 "a .claude/settings.json or .mcp.json created inside is not there afterwards" "$([ ! -e "$repo/.claude" ] && [ ! -e "$repo/.mcp.json" ]; echo $?)" "$(cd "$repo" && ls -d .claude .mcp.json 2>/dev/null | tr '\n' ' ')on the host"
 inside 'mkdir .claude .claude.created-in-sandbox.1 created-in-sandbox.1 && echo "{}" >.claude/settings.json && chmod 555 .claude . ; exit 0'

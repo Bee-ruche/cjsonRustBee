@@ -19,7 +19,8 @@ Two forms, the same as for every project of the hive:
 - **Without Docker** (`sandbox/sans-docker.sh <command>`, Linux): no network, none of your environment, an empty
   home; the work tree is the one writable place, but for its guarded paths, read-only there: `.git` (its history
   only), `.github`, `.claude`, `.mcp.json`, `AGENTS.md`, `CLAUDE.md`, what the project's settings protect (`bee/`,
-  `reference/`, `harness/`, `README.md`, `LICENSE`, `.gitignore`), the settings (`hive/`) and `.gitattributes`. The
+  `reference/`, `harness/`, `port/src/lib.rs`, `port/blank.rs`, `port/LEAVES.md`, `README.md`, `LICENSE`,
+  `.gitignore`), the settings (`hive/`) and `.gitattributes`. A leaf, `port/src/<leaf>.rs`, is the command's to write. The
   check writes in the sandbox's own `/tmp` only. After a run, treat what stays writable as untrusted: the rest of the
   tree, and any new path (an instructions file for an agent among them). `sandbox/test_sandbox.sh
   sandbox/sans-docker.sh <an empty folder>` checks each protection on a throwaway repository it makes there (read
