@@ -2475,7 +2475,8 @@ static int special(text *t, const char *leaf, size_t number)
            children in reverse order; names of 1500 bytes differing at their end; Strings and Raws of 65 to 1500 bytes
            differing at their last byte; arrays of more than 255 children; « é » and « É » in UTF-8 and in Latin-1; a name
            given twice with doubles that compare_double says equal to the first of the other object but not to the last
-           (its tolerance is not transitive: the lookup finds the first); forms refused */
+           (its tolerance is not transitive: the lookup finds the first); the most children a case holds, in arrays (1532)
+           and in objects (510; 306 of distinct names), and objects 306 deep; forms refused */
         static const char *pairs[][2] = {
             {"n", "n"}, {"n", 0}, {"n", "f"}, {"f", "f"}, {"t", "t"}, {"f", "t"}, {"t", "n"},
             {"i", "i"}, {"i", "j"}, {"i", "u"}, {"u", "i"}, {"i", "v"}, {"v", "i"}, {"u", "v"}, {"o", "O"}, {"O", "o"}, {"o", "i"},
@@ -2610,6 +2611,36 @@ static int special(text *t, const char *leaf, size_t number)
             return 1;
         }
         k -= 3;
+        if (k < 7) {
+            /* the most children a case holds: arrays of 1532 nulls, equal, then b's last a false; objects of 510 members
+               named "", equal, then b's last a false; objects of 306 members of two-byte names, b's in reverse order; and
+               objects 306 deep, each the one child named "" of the one above, null against false at the bottom */
+            put(t, k == 4 ? 0 : 1);
+            for (m = 0; m < 2; m++) {
+                if (k < 2) {
+                    put(t, 32), put_two(t, 1532);
+                    for (n = 0; n < 1532; n++)
+                        put(t, k == 1 && m && n == 1531 ? 1 : 4);
+                } else if (k < 4) {
+                    put(t, 64), put_two(t, 510);
+                    for (n = 0; n < 510; n++)
+                        put(t, k == 3 && m && n == 509 ? 1 : 4), put_two(t, 0);
+                } else if (k < 6) {
+                    put(t, 64), put_two(t, 306);
+                    for (n = 0; n < 306; n++) {
+                        size_t which = m ? 305 - n : n;
+                        put(t, 4), put_two(t, 2), put(t, 'a' + (int)(which / 26)), put(t, 'a' + (int)(which % 26));
+                    }
+                } else {
+                    put(t, 64), put_two(t, 1);
+                    for (n = 0; n < 305; n++)
+                        put(t, 64), put_two(t, 0), put_two(t, 1);
+                    put(t, m ? 1 : 4), put_two(t, 0);
+                }
+            }
+            return 1;
+        }
+        k -= 7;
         switch (k) {                                                 /* refused, but for 8 and 9 */
         case 0: return 1;                                            /* nothing */
         case 1: put(t, 1); return 1;                                 /* the flag alone */
@@ -2629,7 +2660,8 @@ static int special(text *t, const char *leaf, size_t number)
            written short (as for the printer: n f t i d s S E c r z R x y, [ ] and { }; the names k, K (NULL), e (""), q), the
            item given named too, with recurse 0 and 1, at the rooms 0, one short, the room needed and 65535; recurse as bytes
            other than 1; arrays nested 1000 deep, at the room they need and one short, with and without recurse, and 1001 and
-           1021 deep; objects of 300 children; a name and a String of 3000 bytes; forms refused */
+           1021 deep; objects of 300 children; arrays of 256, 300 and 3063 children and an object of 1021, the most a case
+           holds; a name and a String of 3000 bytes; forms refused */
         static const char *trees[] = {"kn", "Kn", "en", "ks", "kS", "KS", "kE", "eE", "kr", "kR", "kz", "ki", "kd", "kx", "Ky",
                                       "k[]", "K{}", "k[nS]", "k{kn}", "k{Kn}", "e{ksKS}", "K[[s]]", "k{k{k[i]}}", "e{e[]Ks}",
                                       "q[rRzE]", "K{K{}e[]}", "k[{kn}{Kf}]"};
@@ -2701,6 +2733,22 @@ static int special(text *t, const char *leaf, size_t number)
             return 1;
         }
         k -= 3;
+        if (k < 6) {
+            /* arrays of 256, 300 and 3063 nulls (the most a case holds), and an object of 1021 members named "" (the
+               most), at the room the copy needs; the two largest one short of it too */
+            static const size_t counts[] = {256, 300, 3063, 3063, 1021, 1021};
+            int object = k >= 4;
+            put_two(t, 0), put(t, 1), put(t, object ? 64 : 32), put_two(t, 1), put(t, 'k'), put_two(t, counts[k]);
+            for (n = 0; n < counts[k]; n++) {
+                put(t, 4);
+                if (object)
+                    put_two(t, 0);
+            }
+            needed = copies(t->bytes + 3, t->bytes + t->length, 1, 1, &after);
+            set_two(t, 0, k == 3 || k == 5 ? needed - 1 : needed);
+            return 1;
+        }
+        k -= 6;
         if (k < 2) {                                                 /* an object of 300 children « "k": null »: 602 allocations, the room needed and one short */
             put_two(t, 0), put(t, 1), put(t, 64), put_two(t, 1), put(t, 'k'), put_two(t, 300);
             for (n = 0; n < 300; n++)
@@ -2740,7 +2788,8 @@ static int special(text *t, const char *leaf, size_t number)
            only, once, and only when the text is 5 bytes long or more), blanks and zeros before the value; the flag as bytes
            other than 1; the room from 0 to one more than two texts need (the root's item first); the deep ones at the rooms
            around what they ask before the 1001st container fails; nesting at the limit and past it; the longest text; answers
-           around the answer's buffer's length, and longer (marked: ` stands for a zero byte) */
+           around the answer's buffer's length, and longer; midpoints between two doubles, then zeros, then a 1; and all of
+           parse_value's fixed cases (marked: ` stands for a zero byte) */
         static const char *texts[] = {
             "", " ", "  ", "`", "```", " \t\r\n", "1", "1`", "1``", "1`x", "1 ", "1 `", "1` ", "1 2", "1`2", " 1", "`1",
             "`` 1 ``", "[1] x", "[1]`x", "[1]`", "[1] `", "[1]  ", "{}", "{} `", "\"ab\"`", "\"a`b\"", "{\"a`b\":1}`", "nul",
@@ -2820,6 +2869,46 @@ static int special(text *t, const char *leaf, size_t number)
         k -= 3;
         if (k < 3) {                                                 /* too short: refused */
             for (n = 0; n < k; n++)
+                put(t, 0);
+            return 1;
+        }
+        k -= 3;
+        if (k < 2 * 4) {
+            /* exact midpoints between two doubles, then zeros, then a 1 (or nothing): the 1 decides the rounding however
+               far it lies, so a conversion that keeps some digits and drops the rest decides it wrongly */
+            static const char *heads[] = {"9007199254740993", "9007199254740993", "9007199254740995",
+                                          "1.00000000000000011102230246251565404236316680908203125"};
+            static const size_t zeros[] = {600, 1100, 600, 700};
+            put_offset(t, 65535), put(t, (int)(k % 2));
+            puts_in(t, heads[k / 2]);
+            for (n = 0; n < zeros[k / 2]; n++)
+                put(t, '0');
+            if (k / 2 != 2)
+                put(t, '1');
+            if (k % 2)
+                put(t, 0);
+            return 1;
+        }
+        k -= 2 * 4;
+        {
+            /* parse_value's fixed cases, all of them (a worker may write the parser anew rather than copy the accepted
+               leaf), each made a case of this unit: the room one more, for the root's item (65535 kept); the offset
+               dropped, so that the bytes before it are read as part of the text; with the flag 0 as it is, then with the
+               flag 1 and a zero byte after it. Its inputs too short to hold a room and an offset become the empty text */
+            static text from;
+            size_t room;
+            from.length = 0;
+            if (!special(&from, "parse_value", k / 2))
+                return 0;
+            if (from.length < 4) {
+                put_offset(t, 65535), put(t, (int)(k % 2));
+                return 1;
+            }
+            room = (size_t)from.bytes[0] | (size_t)from.bytes[1] << 8;
+            put_offset(t, room == 65535 ? 65535 : room + 1), put(t, (int)(k % 2));
+            for (n = 4; n < from.length; n++)
+                put(t, from.bytes[n]);
+            if (k % 2)
                 put(t, 0);
             return 1;
         }
