@@ -212,7 +212,7 @@
       ],
       "cases": 4000,
       "case_bytes": 3072,
-      "answer_bytes": 18448,
+      "answer_bytes": 1,
       "refuses": true
     },
     "duplicate": {
