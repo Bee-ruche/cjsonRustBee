@@ -21,7 +21,7 @@ and the answer are. « Refused » means `Err(())`.
 | `strdup` | `cJSON_strdup` | two bytes, the room (below), then a text without a zero byte (with one: refused) (fewer than two bytes: refused) | the block it asked for, as it leaves it (below): the copy, its zero included; refused when the original fails (it returns `NULL`) |
 | `print_value` | `print_value`, as `cJSON_PrintPreallocated` calls it, with all it calls (`print_array`, `print_object`, `print_number`, `print_string_ptr`) | two bytes, low byte first, the length of the buffer the original prints into (the tree of items, below), then one byte, `format`, then one item in the tree's form (below); refused when that length is more than `6 × (input length) + 16` (the whole input's length, these three bytes included), when the item is cut short or bytes follow it, or when a text in it holds a zero byte (fewer than three bytes: refused) | the text the original prints, without its zero; refused when the original fails (it returns false) |
 | `parse_value` | `parse_value`, with all it calls (`parse_array`, `parse_object`, `parse_string`, `parse_number`, `buffer_skip_whitespace`) | two bytes, low byte first, the room, counted in allocations (the tree of items, below), then a buffer (below): its offset, then its content (fewer than four bytes: refused) | one byte, 1 when the original succeeds and 0 when it fails; then the offset it leaves (two bytes, low byte first; it moves the offset when it fails too); then, when it succeeds, the item it parsed, in the tree's form (below); refused when that answer is longer than `6 × (input length) + 16` bytes (the buffer the leaf answers in) |
-| `parse_with_length_opts` | `cJSON_ParseWithLengthOpts`, with all it calls (`skip_utf8_bom`, `buffer_skip_whitespace`, `parse_value` and all that calls) | two bytes, low byte first, the room, counted in allocations (the tree of items, below), then one byte, `require_null_terminated` (0: false; any other value: true), then the text: `value` is its first byte and `buffer_length` its length, the count of bytes that follow these three (zero bytes among them too; 0 when none) (fewer than three bytes: refused) | one byte, 1 when the original returns an item and 0 when it returns `NULL`; then where it leaves `*return_parse_end`, as its distance from `value` (two bytes, low byte first); then, when it returns an item, that item in the tree's form (below); refused when that answer is longer than `6 × (input length) + 16` bytes (the buffer the leaf answers in) |
+| `parse_with_length_opts` | `cJSON_ParseWithLengthOpts`, with all it calls (`skip_utf8_bom`, `buffer_skip_whitespace`, `parse_value` and all that calls) | two bytes, low byte first, the room, counted in allocations (the tree of items, below), then one byte, `require_null_terminated` (0: false; any other value: true), then the text: `value` points at its first byte and `buffer_length` is its length, the count of bytes that follow these three (zero bytes among them too; 0 when none) (fewer than three bytes: refused) | one byte, 1 when the original returns an item and 0 when it returns `NULL`; then where it leaves `*return_parse_end`, as its distance from `value` (two bytes, low byte first); then, when it returns an item, that item in the tree's form (below); refused when that answer is longer than `6 × (input length) + 16` bytes (the buffer the leaf answers in) |
 | `compare` | `cJSON_Compare`, with all it calls (`compare_double`, `get_object_item`, `case_insensitive_strcmp`) | one byte, `case_sensitive` (0: false; any other value: true), then the item `a` in the tree's form (below), then the item `b` in the same form, or nothing: then `b` is `a` itself (the original is given the same pointer twice); refused when an item is cut short, when a text in them holds a zero byte, or when bytes follow `b` (fewer than two bytes: refused) | one byte: 1 when the original returns true, else 0 |
 | `duplicate` | `cJSON_Duplicate`, with all it calls (`cJSON_Duplicate_rec`, `cJSON_New_Item`, `cJSON_strdup`) | two bytes, low byte first, the room, counted in allocations (the tree of items, below), then one byte, `recurse` (0: false; any other value: true), then one item in the tree's form (below), named: its name (a text) right after its type byte, as a child of an object is written; refused when the item is cut short, when a text in it holds a zero byte, or when bytes follow it (fewer than four bytes: refused) | the copy the original returns, in the same form, named likewise; refused when the original fails (it returns `NULL`) |
 
@@ -139,8 +139,9 @@ too, of one byte); then, with `recurse`, it does the same for each child in orde
 its children). It fails where an allocation fails, and frees what it built. The flags `cJSON_IsReference` and
 `cJSON_StringIsConst` are not in the form: the item's type is its byte alone, so every name is copied. A copy made
 without `recurse` has no children: an array or an object then has the count 0. Its `valueint` and `valuedouble` are
-copied whatever its type; the form holds them for a Number alone. The cases never nest `CJSON_CIRCULAR_LIMIT` (10000)
-deep.
+copied whatever its type; the form holds them for a Number alone. A case of 3072 bytes nests at most about 1020 deep:
+never `CJSON_CIRCULAR_LIMIT` (10000) deep, and the copy has no other limit (`CJSON_NESTING_LIMIT` is the parser's and
+the printer's, not this function's).
 
 `print_value`, `print_array` and `print_object` call one another, and `print_number` and `print_string_ptr`; a leaf
 is built alone (`port/src/lib.rs`), so this one is the whole printer: its file holds all the code it runs. It may
@@ -160,10 +161,12 @@ skips blanks or the UTF-8 mark (`EF BB BF`) before the value, and nothing asks f
 `cJSON_Compare` calls itself, and `compare_double`, `get_object_item` and `case_insensitive_strcmp`; `cJSON_Duplicate`
 calls `cJSON_Duplicate_rec`, which calls itself, `cJSON_New_Item` and `cJSON_strdup`. Each of these leaves too is built
 alone, so its file holds all the code it runs. Each may copy what it needs of the accepted leaves (their files on the
-branch `hive`): `parse_with_length_opts` of `parse_value` and `skip_utf8_bom` (the bounds of `parse_value` hold here
-too: numbers of thousands of digits), `compare` of `compare_double` and `strcasecmp`, `duplicate` of `strdup`; it
-cannot call them. A leaf that goes down one call for each array or object nested in another goes about 1000 calls deep
-in these cases too: each such call must keep its own locals well under 8 KB.
+branch `hive`): `parse_with_length_opts` of `parse_value`, `skip_utf8_bom` and `buffer_skip_whitespace` (the bounds
+of `parse_value` hold here too: numbers of thousands of digits), `compare` of `compare_double` and `strcasecmp`,
+`duplicate` of `strdup`; it cannot call them. A leaf that goes down one call for each array or object nested in another
+goes about 1020 calls deep in the cases of `duplicate`, 1000 in those of `parse_with_length_opts` and 510 in those of
+`compare` (its two trees share the 3072 bytes; nested deeper, an item is given twice, and the original goes no further
+than the item given): each such call must keep its own locals well under 8 KB.
 
 ## The leaves of numbers
 
