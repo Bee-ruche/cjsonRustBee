@@ -141,7 +141,8 @@ its children). It fails where an allocation fails, and frees what it built. The 
 without `recurse` has no children: an array or an object then has the count 0. Its `valueint` and `valuedouble` are
 copied whatever its type; the form holds them for a Number alone. A case of 3072 bytes nests at most about 1020 deep:
 never `CJSON_CIRCULAR_LIMIT` (10000) deep, and the copy has no other limit (`CJSON_NESTING_LIMIT` is the parser's and
-the printer's, not this function's).
+the printer's, not this function's). So no case tells a leaf that stops anywhere deeper than about 1021 levels from
+the original.
 
 `print_value`, `print_array` and `print_object` call one another, and `print_number` and `print_string_ptr`; a leaf
 is built alone (`port/src/lib.rs`), so this one is the whole printer: its file holds all the code it runs. It may
@@ -189,7 +190,9 @@ holds none of these words, in code, comments or strings: `static` (the lifetime 
 `extern`, `macro_rules`, `include`, `include_str`, `include_bytes`, `env`, `option_env`, `concat_idents`, `asm`,
 `global_asm`, `mod`; nowhere the character `#` (so no attribute); and no type written `for<'a> …`. The build
 looks for these in the file's text, comments included: it parses nothing, so a comment that says « no unsafe »
-is refused too. This is a rule of the project, read again by its maintainers on each leaf: the text of a file
+is refused too. They are whole words, as `grep -w` finds them (`bee/reference/build-unit`): a letter, a digit or `_`
+beside one makes another word, so `mode`, `model`, `environment`, `included` or `env_var` are fine, and `mod.rs` or
+`env-var` are not. This is a rule of the project, read again by its maintainers on each leaf: the text of a file
 cannot tell everything a leaf does.
 
 A leaf is a function of its input alone: it keeps nothing from one call to the next, reads nothing but its
