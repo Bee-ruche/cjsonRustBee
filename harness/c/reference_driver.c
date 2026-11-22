@@ -532,6 +532,103 @@ static int leaf_parse_value(const unsigned char *in, size_t n, unsigned char *ou
     return 0;
 }
 
+/* The functions on whole trees. cJSON_Duplicate and cJSON_ParseWithLengthOpts allocate through cJSON's own hooks: for one
+   call the driver makes the counted allocator above cJSON's (cJSON_InitHooks: with an allocator other than malloc, the
+   original does not use realloc), then gives malloc and free back; nothing else of the driver allocates through them. */
+static void counted_hooks(size_t given)
+{
+    cJSON_Hooks hooks;
+    hooks.malloc_fn = counted_allocate;
+    hooks.free_fn = free;
+    room = given, calls = 0;
+    cJSON_InitHooks(&hooks);
+}
+
+/* The whole parse: the room (allocations, the root's item first), the flag require_null_terminated (any byte: a
+   cJSON_bool), then the text: cJSON_ParseWithLengthOpts(text, its length, &end, flag), the text in the case's own block,
+   so that a read beyond it is seen. The answer: the success byte, end - text (two bytes, low byte first), and on success
+   the root in the tree's form. Refused when that answer would not fit the answer's buffer. */
+static int leaf_parse_with_length_opts(const unsigned char *in, size_t n, unsigned char *out, size_t cap, size_t *len)
+{
+    const char *text, *end = NULL;
+    cJSON *root;
+    writer w;
+    if (n < 3)
+        return 1; /* no room or no flag */
+    text = (const char *)in + 3;
+    counted_hooks(offset_at(in));
+    root = cJSON_ParseWithLengthOpts(text, n - 3, &end, (cJSON_bool)in[2]);
+    cJSON_InitHooks(NULL);
+    if (end == NULL || end < text || (size_t)(end - text) > n - 3 || n - 3 > 0xFFFF || cap < 3)
+        exit(4); /* never: the original sets end, within the text */
+    out[0] = root ? 1 : 0;
+    put_le(out + 1, (size_t)(end - text), 2);
+    w.out = out, w.cap = cap, w.at = 3;
+    if (root && write_item(&w, root, 0)) {
+        cJSON_Delete(root);
+        return 1; /* the answer would not fit the answer's buffer */
+    }
+    cJSON_Delete(root);
+    *len = w.at;
+    return 0;
+}
+
+/* The comparison: the flag case_sensitive (any byte), then a, then b, or nothing: then b is a itself (the same pointer
+   given twice). Both trees are built as for the printer. The answer: one byte, 1 when the original says equal. */
+static int leaf_compare(const unsigned char *in, size_t n, unsigned char *out, size_t cap, size_t *len)
+{
+    reader r;
+    cJSON *a = NULL, *b = NULL;
+    int refused;
+    if (n < 1 || cap < 1)
+        return 1; /* no flag */
+    r.at = in + 1;
+    r.end = in + n;
+    refused = read_item(&r, 0, &a);
+    if (!refused && r.at != r.end)
+        refused = read_item(&r, 0, &b) || r.at != r.end;
+    if (refused) {
+        cJSON_Delete(a);
+        cJSON_Delete(b);
+        return 1; /* an item cut short, a text with a zero byte, or bytes after b */
+    }
+    out[0] = cJSON_Compare(a, b ? b : a, (cJSON_bool)in[0]) ? 1 : 0;
+    cJSON_Delete(a);
+    cJSON_Delete(b);
+    *len = 1;
+    return 0;
+}
+
+/* The copy: the room (allocations), the flag recurse (any byte), then one item, named: its name right after its type
+   byte, as an object's child is written. cJSON_Duplicate(item, flag). The answer: the copy in the tree's form, named
+   likewise; refused where the original fails (it returns NULL). */
+static int leaf_duplicate(const unsigned char *in, size_t n, unsigned char *out, size_t cap, size_t *len)
+{
+    reader r;
+    cJSON *item = NULL, *copy;
+    writer w;
+    if (n < 3)
+        return 1; /* no room or no flag */
+    r.at = in + 3;
+    r.end = in + n;
+    if (read_item(&r, 1, &item) || r.at != r.end) {
+        cJSON_Delete(item);
+        return 1; /* the item cut short, a text with a zero byte, or bytes after it */
+    }
+    counted_hooks(offset_at(in));
+    copy = cJSON_Duplicate(item, (cJSON_bool)in[2]);
+    cJSON_InitHooks(NULL);
+    cJSON_Delete(item);
+    if (copy == NULL)
+        return 1; /* the original fails: an allocation fails */
+    w.out = out, w.cap = cap, w.at = 0;
+    if (write_item(&w, copy, 1))
+        exit(4); /* never: the copy's form is no longer than the item given */
+    cJSON_Delete(copy);
+    *len = w.at;
+    return 0;
+}
+
 static unsigned long u32_at(const unsigned char *p) { return p[0] | (p[1] << 8) | (p[2] << 16) | ((unsigned long)p[3] << 24); }
 
 static void put_u32(FILE *f, unsigned long v)
@@ -547,7 +644,8 @@ int main(int argc, char **argv)
         {"hex4", leaf_hex4}, {"utf16", leaf_utf16}, {"minify", leaf_minify}, {"print_string", leaf_print_string}, {"strcasecmp", leaf_strcasecmp},
         {"parse_number", leaf_parse_number}, {"compare_double", leaf_compare_double}, {"print_number", leaf_print_number},
         {"buffer_skip_whitespace", leaf_buffer_skip_whitespace}, {"skip_utf8_bom", leaf_skip_utf8_bom}, {"update_offset", leaf_update_offset},
-        {"parse_string", leaf_parse_string}, {"strdup", leaf_strdup}, {"print_value", leaf_print_value}, {"parse_value", leaf_parse_value}};
+        {"parse_string", leaf_parse_string}, {"strdup", leaf_strdup}, {"print_value", leaf_print_value}, {"parse_value", leaf_parse_value},
+        {"parse_with_length_opts", leaf_parse_with_length_opts}, {"compare", leaf_compare}, {"duplicate", leaf_duplicate}};
     leaf_function leaf = NULL;
     FILE *in, *out;
     unsigned char *cases;

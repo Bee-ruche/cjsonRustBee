@@ -21,6 +21,9 @@ and the answer are. « Refused » means `Err(())`.
 | `strdup` | `cJSON_strdup` | two bytes, the room (below), then a text without a zero byte (with one: refused) (fewer than two bytes: refused) | the block it asked for, as it leaves it (below): the copy, its zero included; refused when the original fails (it returns `NULL`) |
 | `print_value` | `print_value`, as `cJSON_PrintPreallocated` calls it, with all it calls (`print_array`, `print_object`, `print_number`, `print_string_ptr`) | two bytes, low byte first, the length of the buffer the original prints into (the tree of items, below), then one byte, `format`, then one item in the tree's form (below); refused when that length is more than `6 × (input length) + 16` (the whole input's length, these three bytes included), when the item is cut short or bytes follow it, or when a text in it holds a zero byte (fewer than three bytes: refused) | the text the original prints, without its zero; refused when the original fails (it returns false) |
 | `parse_value` | `parse_value`, with all it calls (`parse_array`, `parse_object`, `parse_string`, `parse_number`, `buffer_skip_whitespace`) | two bytes, low byte first, the room, counted in allocations (the tree of items, below), then a buffer (below): its offset, then its content (fewer than four bytes: refused) | one byte, 1 when the original succeeds and 0 when it fails; then the offset it leaves (two bytes, low byte first; it moves the offset when it fails too); then, when it succeeds, the item it parsed, in the tree's form (below); refused when that answer is longer than `6 × (input length) + 16` bytes (the buffer the leaf answers in) |
+| `parse_with_length_opts` | `cJSON_ParseWithLengthOpts`, with all it calls (`skip_utf8_bom`, `buffer_skip_whitespace`, `parse_value` and all that calls) | two bytes, low byte first, the room, counted in allocations (the tree of items, below), then one byte, `require_null_terminated` (0: false; any other value: true), then the text: `value` is its first byte and `buffer_length` its length, the count of bytes that follow these three (zero bytes among them too; 0 when none) (fewer than three bytes: refused) | one byte, 1 when the original returns an item and 0 when it returns `NULL`; then where it leaves `*return_parse_end`, as its distance from `value` (two bytes, low byte first); then, when it returns an item, that item in the tree's form (below); refused when that answer is longer than `6 × (input length) + 16` bytes (the buffer the leaf answers in) |
+| `compare` | `cJSON_Compare`, with all it calls (`compare_double`, `get_object_item`, `case_insensitive_strcmp`) | one byte, `case_sensitive` (0: false; any other value: true), then the item `a` in the tree's form (below), then the item `b` in the same form, or nothing: then `b` is `a` itself (the original is given the same pointer twice); refused when an item is cut short, when a text in them holds a zero byte, or when bytes follow `b` (fewer than two bytes: refused) | one byte: 1 when the original returns true, else 0 |
+| `duplicate` | `cJSON_Duplicate`, with all it calls (`cJSON_Duplicate_rec`, `cJSON_New_Item`, `cJSON_strdup`) | two bytes, low byte first, the room, counted in allocations (the tree of items, below), then one byte, `recurse` (0: false; any other value: true), then one item in the tree's form (below), named: its name (a text) right after its type byte, as a child of an object is written; refused when the item is cut short, when a text in it holds a zero byte, or when bytes follow it (fewer than four bytes: refused) | the copy the original returns, in the same form, named likewise; refused when the original fails (it returns `NULL`) |
 
 ## The leaves that allocate their result
 
@@ -100,6 +103,45 @@ are, with the names it parsed. A text is answered as the C string it is: its byt
 `\u0000` ends it). The form holds no more of an item than the fields above: not the `valueint` 1 a `true` is given,
 not the `prev` links.
 
+For `parse_with_length_opts`, the driver makes its allocator cJSON's own for the call (`cJSON_InitHooks`, with `free`
+to free; with an allocator other than `malloc`, the original does not use `realloc`): the allocator `parse_value` is
+given above, which counts its calls and fails from the call after the first `room` on. The original asks it first for
+the root's item, before it reads anything (so a room of 0 fails at once; an empty text fails before that). It then
+skips the UTF-8 mark (`EF BB BF`) when the text begins with it and is 5 bytes long or more
+(`can_access_at_index(buffer, 4)`), then blanks, as `buffer_skip_whitespace` skips them (every byte up to 32, the zero
+byte too; when it skips up to the end of the text, it steps back onto the last byte; at the end already, it moves
+nothing), and calls `parse_value` there, at the depth 0: all that is said of `parse_value` above holds. With
+`require_null_terminated`, after the value, it skips blanks again the same way and fails unless a zero byte lies where
+it stops: so it succeeds only when every byte after the value is a blank and the last of them, the text's last byte,
+is a zero byte. Where it leaves `*return_parse_end`: on success, at the parse buffer's offset then (just after the
+value; with `require_null_terminated`, the text's last byte); on failure, at the offset the parse buffer was left at
+when that lies within the text, else at the text's last byte (its length minus 1), and at 0 for an empty text.
+
+For `compare`, the driver builds the two trees as for `print_value` (every field the form does not hold is zero, or
+`NULL`) and calls `cJSON_Compare(a, b, case_sensitive)`. The original reads the types (the low byte), a Number's
+`valuedouble` (compared by `compare_double`: its `valueint` is not compared), a String's and a Raw's `valuestring` (by
+`strcmp`, with their case; not equal when either is `NULL`), an array's children in order (not equal when one array
+is longer), and an object's children by their names: each child of `a` is looked up among the children of `b`
+(`get_object_item`: the first child of that name; with `case_sensitive`, by `strcmp`, stopping at the first child
+whose name is `NULL`; without it, by `case_insensitive_strcmp`, which lowers the letters `A` to `Z` alone, as the C
+library's `tolower` does in the C locale, and passes over a child whose name is `NULL`; a `NULL` name finds nothing)
+and compared with the child found, then each child of `b` among those of `a`, likewise. Given `a` twice, it says
+equal at once, without reading further, when the type is one of `cJSON_False`, `cJSON_True`, `cJSON_NULL`,
+`cJSON_Number`, `cJSON_String`, `cJSON_Raw`, `cJSON_Array` and `cJSON_Object`; any other type byte is never equal, not
+even to itself. Its work doubles with each level of equal objects nested in one another (each child is compared from
+both sides): the cases keep that within the judge's time for a leaf that does the same work.
+
+For `duplicate`, the driver builds the item as for `print_value`, its name in its `string` field, and makes its
+allocator cJSON's own for the call, as for `parse_with_length_opts`: it counts its calls, and fails from the call
+after the first `room` on. The original asks for the item's block (`cJSON_New_Item`), then for a block for its
+`valuestring` when that is not `NULL`, then for one for its name when that is not `NULL` (an empty text takes a block
+too, of one byte); then, with `recurse`, it does the same for each child in order, each whole (a child is copied with
+its children). It fails where an allocation fails, and frees what it built. The flags `cJSON_IsReference` and
+`cJSON_StringIsConst` are not in the form: the item's type is its byte alone, so every name is copied. A copy made
+without `recurse` has no children: an array or an object then has the count 0. Its `valueint` and `valuedouble` are
+copied whatever its type; the form holds them for a Number alone. The cases never nest `CJSON_CIRCULAR_LIMIT` (10000)
+deep.
+
 `print_value`, `print_array` and `print_object` call one another, and `print_number` and `print_string_ptr`; a leaf
 is built alone (`port/src/lib.rs`), so this one is the whole printer: its file holds all the code it runs. It may
 copy what it needs of the accepted leaves `print_number` and `print_string` (their files under `port/src/` on the
@@ -113,6 +155,15 @@ number runs to thousands of digits (`parse_number` copies every byte it takes, u
 `parse_number` with a fixed capacity will not do. The driver calls `parse_value` itself, at the offset given: nothing
 skips blanks or the UTF-8 mark (`EF BB BF`) before the value, and nothing asks for the end of the text after it, as
 `cJSON_ParseWithLengthOpts` would.
+
+`cJSON_ParseWithLengthOpts` calls `skip_utf8_bom`, `buffer_skip_whitespace` and `parse_value` with all it calls;
+`cJSON_Compare` calls itself, and `compare_double`, `get_object_item` and `case_insensitive_strcmp`; `cJSON_Duplicate`
+calls `cJSON_Duplicate_rec`, which calls itself, `cJSON_New_Item` and `cJSON_strdup`. Each of these leaves too is built
+alone, so its file holds all the code it runs. Each may copy what it needs of the accepted leaves (their files on the
+branch `hive`): `parse_with_length_opts` of `parse_value` and `skip_utf8_bom` (the bounds of `parse_value` hold here
+too: numbers of thousands of digits), `compare` of `compare_double` and `strcasecmp`, `duplicate` of `strdup`; it
+cannot call them. A leaf that goes down one call for each array or object nested in another goes about 1000 calls deep
+in these cases too: each such call must keep its own locals well under 8 KB.
 
 ## The leaves of numbers
 
@@ -147,7 +198,8 @@ leaf before it is published: one that is right by a trick is removed.
 ## The buffer
 
 The output buffer a leaf is given is zeroed and holds `6 × (input length) + 16` bytes: more than any right answer,
-but for a success of `parse_value`, which can be longer and is then refused (its line, above).
+but for a success of `parse_value` or of `parse_with_length_opts`, which can be longer and is then refused (their
+lines, above).
 A leaf is a function of its input alone: the same input, the same answer, whatever was asked before.
 
 The build checks integer arithmetic (`-C overflow-checks=on`): an overflow, like an index out of bounds, ends the

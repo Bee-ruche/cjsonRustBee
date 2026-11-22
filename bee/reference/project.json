@@ -190,6 +190,42 @@
       "case_bytes": 3072,
       "answer_bytes": 18448,
       "refuses": true
+    },
+    "parse_with_length_opts": {
+      "files": [
+        "port/src/parse_with_length_opts.rs"
+      ],
+      "blank": [
+        "port/blank.rs"
+      ],
+      "cases": 3000,
+      "case_bytes": 3072,
+      "answer_bytes": 18448,
+      "refuses": true
+    },
+    "compare": {
+      "files": [
+        "port/src/compare.rs"
+      ],
+      "blank": [
+        "port/blank.rs"
+      ],
+      "cases": 4000,
+      "case_bytes": 3072,
+      "answer_bytes": 18448,
+      "refuses": true
+    },
+    "duplicate": {
+      "files": [
+        "port/src/duplicate.rs"
+      ],
+      "blank": [
+        "port/blank.rs"
+      ],
+      "cases": 3000,
+      "case_bytes": 3072,
+      "answer_bytes": 18448,
+      "refuses": true
     }
   },
   "variants": 3,
