@@ -1418,7 +1418,10 @@ static void change_text(text *t, size_t at, int letters_only)
     switch (below(5)) {
     case 0: t->length = at; put_two(t, NOT_A_TEXT); break;
     case 1: t->length = at; put_two(t, 0); break;
-    case 2: if (n && n != NOT_A_TEXT && at + 2 + n == t->length && t->bytes[t->length - 1] != 32) t->bytes[t->length - 1] ^= 32; break;   /* a « @ » for a « ` », « [ » for « { »… */
+    case 2:                                                          /* a « @ » for a « ` », « [ » for « { »… */
+        if (n && n != NOT_A_TEXT && at + 2 + n == t->length && t->bytes[t->length - 1] != 32)
+            t->bytes[t->length - 1] ^= 32;
+        break;
     case 3: if (n && n != NOT_A_TEXT && at + 2 + n == t->length) t->length--, set_two(t, at, n - 1); break;
     default: t->length = at; put_two(t, 1); put(t, '@'); break;
     }
@@ -1645,31 +1648,33 @@ static size_t compare_cost(const text *t)
 }
 
 /* a fixed tree for the comparison, written short: n f t (null, false, true); i (1, its int 1), j (1, its int 7), u (a
-   unit in the last place above 1), v (two units above), o (0), O (-0), N (NaN), I (infinity); s ("ab"), A ("AB"), S (a
-   String whose text is NULL), E (""), r (the Raw "ab"), R (a Raw whose text is NULL), z (the Raw ""); x, y, w (the types
-   0, 3, 255: none); [ … ] an array; { … } an object, each child a name then an item; the names: k ("k"), K ("K"), _
-   (NULL), e (""), @ and ` (themselves), a ("ab"), A ("AB"), b ("aB"), u and U (« é » and « É » in UTF-8) */
+   unit in the last place above 1), v (two units above), m (one below), o (0), O (-0), N (NaN), I (infinity); s ("ab"),
+   A ("AB"), S (a String whose text is NULL), E (""), r (the Raw "ab"), R (a Raw whose text is NULL), z (the Raw ""); x,
+   y, w (the types 0, 3, 255: none); [ … ] an array; { … } an object, each child a name then an item; the names: k ("k"),
+   K ("K"), _ (NULL), e (""), @ and ` (themselves), a ("ab"), A ("AB"), b ("aB"), u and U (« é » and « É » in UTF-8),
+   p and P (« É » and « é » in Latin-1) */
 static void compare_fixed(text *t, const char **p, int named)
 {
-    static const char *kinds = "nftijuvoONIsASErRzxyw[{", *numbers = "ijuvoONI";
-    static const unsigned char types[] = {4, 1, 2, 8, 8, 8, 8, 8, 8, 8, 8, 16, 16, 16, 16, 128, 128, 128, 0, 3, 255, 32, 64};
-    static const unsigned long long bits[] = {ONE, ONE, ONE + 1, ONE + 2, 0, SIGN, QUIET_NAN, INFINITE};
+    static const char *kinds = "nftijuvoONImsASErRzxyw[{", *numbers = "ijuvoONIm";
+    static const unsigned char types[] = {4, 1, 2, 8, 8, 8, 8, 8, 8, 8, 8, 8, 16, 16, 16, 16, 128, 128, 128, 0, 3, 255, 32, 64};
+    static const unsigned long long bits[] = {ONE, ONE, ONE + 1, ONE + 2, 0, SIGN, QUIET_NAN, INFINITE, ONE - 1};
     char name = named ? *(*p)++ : 0, kind = *(*p)++;
     size_t at, count = 0;
     const char *s;
     put(t, types[strchr(kinds, kind) - kinds]);
     if (named) {
         s = name == 'k' ? "k" : name == 'K' ? "K" : name == 'e' ? "" : name == '@' ? "@" : name == '`' ? "`" : name == 'a' ? "ab"
-          : name == 'A' ? "AB" : name == 'b' ? "aB" : name == 'u' ? "\303\251" : name == 'U' ? "\303\211" : NULL;
+          : name == 'A' ? "AB" : name == 'b' ? "aB" : name == 'u' ? "\303\251" : name == 'U' ? "\303\211"
+          : name == 'p' ? "\311" : name == 'P' ? "\351" : NULL;
         if (s)
             put_two(t, strlen(s)), puts_in(t, s);
         else
             put_two(t, NOT_A_TEXT);
     }
     switch (kind) {
-    case 'i': case 'j': case 'u': case 'v': case 'o': case 'O': case 'N': case 'I':
+    case 'i': case 'j': case 'u': case 'v': case 'o': case 'O': case 'N': case 'I': case 'm':
         put_bits(t, bits[strchr(numbers, kind) - numbers]);
-        put_int(t, kind == 'j' ? 7 : kind == 'i' || kind == 'u' || kind == 'v' ? 1 : 0);
+        put_int(t, kind == 'j' ? 7 : kind == 'i' || kind == 'u' || kind == 'v' || kind == 'm' ? 1 : 0);
         break;
     case 's': case 'r': put_two(t, 2); puts_in(t, "ab"); break;
     case 'A': put_two(t, 2); puts_in(t, "AB"); break;
@@ -2467,7 +2472,10 @@ static int special(text *t, const char *leaf, size_t number)
            NULL names (false, but given twice); one object a part of the other, both ways; the flag as bytes other than 1;
            arrays 510 deep, equal and differing at the bottom, and 1020 deep given twice; equal objects 14 deep (each level
            doubles the original's work), objects 250 deep differing at the bottom, 500 deep given twice; objects of 300
-           children in reverse order; names of 1500 bytes differing at their end; forms refused */
+           children in reverse order; names of 1500 bytes differing at their end; Strings and Raws of 65 to 1500 bytes
+           differing at their last byte; arrays of more than 255 children; « é » and « É » in UTF-8 and in Latin-1; a name
+           given twice with doubles that compare_double says equal to the first of the other object but not to the last
+           (its tolerance is not transitive: the lookup finds the first); forms refused */
         static const char *pairs[][2] = {
             {"n", "n"}, {"n", 0}, {"n", "f"}, {"f", "f"}, {"t", "t"}, {"f", "t"}, {"t", "n"},
             {"i", "i"}, {"i", "j"}, {"i", "u"}, {"u", "i"}, {"i", "v"}, {"v", "i"}, {"u", "v"}, {"o", "O"}, {"O", "o"}, {"o", "i"},
@@ -2489,7 +2497,8 @@ static int special(text *t, const char *leaf, size_t number)
             {"[n]", "{kn}"}, {"{kv}", "{ki}"}, {"{kj}", "{ki}"}, {"{ks}", "{kA}"}, {"{ks}", "{Ks}"}, {"{ksKA}", "{KAks}"},
             {"{ksKA}", "{Ksks}"}, {"[{kn}{Kf}]", "[{Kn}{kf}]"}, {"[{kn}{Kf}]", "[{kf}{Kn}]"}, {"{k{knKt}}", "{k{Ktkn}}"},
             {"{k{knKt}}", "{K{Ktkn}}"}, {"{kx}", "{kx}"}, {"{kx}", 0}, {"{knkx}", "{kn}"}, {"{kn}", "{knkx}"},
-            {"{un}", "{Un}"}, {"{Un}", "{un}"}, {"{un}", "{un}"}, {"{us}", "{Us}"}};
+            {"{un}", "{Un}"}, {"{Un}", "{un}"}, {"{un}", "{un}"}, {"{us}", "{Us}"}, {"{pn}", "{Pn}"},
+            {"{Pn}", "{pn}"}, {"{kukm}", "{kikv}"}, {"{kikv}", "{kukm}"}, {"{kmku}", "{kvki}"}};
         static const int flags[] = {2, 128, 255};
         size_t k = number, n, m;
         const char *p;
@@ -2577,6 +2586,30 @@ static int special(text *t, const char *leaf, size_t number)
             return 1;
         }
         k -= 4;
+        if (k < 4) {
+            /* two Strings, then two Raws, of 65, 257, 1100 and 1500 bytes, differing at their last byte only */
+            static const size_t lengths[] = {65, 257, 1100, 1500};
+            put(t, (int)(k % 2));
+            for (m = 0; m < 2; m++) {
+                put(t, k < 2 ? 16 : 128), put_two(t, lengths[k]);
+                for (n = 0; n + 1 < lengths[k]; n++)
+                    put(t, 'a' + (int)(n % 26));
+                put(t, m ? 'c' : 'b');
+            }
+            return 1;
+        }
+        k -= 4;
+        if (k < 3) {                                                 /* arrays of more than 255 children: 256 nulls and none, 300 and 44, 256 and 256 */
+            static const size_t counts[][2] = {{256, 0}, {300, 44}, {256, 256}};
+            put(t, 1);
+            for (m = 0; m < 2; m++) {
+                put(t, 32), put_two(t, counts[k][m]);
+                for (n = 0; n < counts[k][m]; n++)
+                    put(t, 4);
+            }
+            return 1;
+        }
+        k -= 3;
         switch (k) {                                                 /* refused, but for 8 and 9 */
         case 0: return 1;                                            /* nothing */
         case 1: put(t, 1); return 1;                                 /* the flag alone */
@@ -2588,14 +2621,15 @@ static int special(text *t, const char *leaf, size_t number)
         case 7: put(t, 0); put(t, 64); put_two(t, 1); put(t, 4); put_two(t, 2); put(t, 'k'); put(t, 0); return 1;
         case 8: put(t, 1); put(t, 4); return 1;                      /* null, given twice: equal */
         case 9: put(t, 0); put(t, 0); return 1;                      /* the type 0, given twice: not equal */
+        case 10: put(t, 1); put(t, 128); put_two(t, 3); put(t, 'a'); put(t, 0); put(t, 'b'); return 1;   /* a Raw with a zero byte */
         default: break;
         }
     } else if (!strcmp(leaf, "duplicate")) {
         /* every type byte, named « k » at the room it needs, and named « » (a block of one byte) one short of it; small trees
            written short (as for the printer: n f t i d s S E c r z R x y, [ ] and { }; the names k, K (NULL), e (""), q), the
            item given named too, with recurse 0 and 1, at the rooms 0, one short, the room needed and 65535; recurse as bytes
-           other than 1; arrays nested 1000 deep, at the room they need and one short, with and without recurse; objects of 300
-           children; a name and a String of 3000 bytes; forms refused */
+           other than 1; arrays nested 1000 deep, at the room they need and one short, with and without recurse, and 1001 and
+           1021 deep; objects of 300 children; a name and a String of 3000 bytes; forms refused */
         static const char *trees[] = {"kn", "Kn", "en", "ks", "kS", "KS", "kE", "eE", "kr", "kR", "kz", "ki", "kd", "kx", "Ky",
                                       "k[]", "K{}", "k[nS]", "k{kn}", "k{Kn}", "e{ksKS}", "K[[s]]", "k{k{k[i]}}", "e{e[]Ks}",
                                       "q[rRzE]", "K{K{}e[]}", "k[{kn}{Kf}]"};
@@ -2655,6 +2689,18 @@ static int special(text *t, const char *leaf, size_t number)
             return 1;
         }
         k -= 4;
+        if (k < 3) {
+            /* arrays nested 1001 and 1021 deep (the deepest a case holds), the room they need, then 65535: deeper than
+               CJSON_NESTING_LIMIT, which is not this function's; its own limit, CJSON_CIRCULAR_LIMIT, is never reached */
+            size_t depth = k ? 1021 : 1001;
+            put_two(t, 0), put(t, 1), put(t, 32), put_two(t, 1), put(t, 'k'), put_two(t, 1);
+            for (n = 1; n < depth; n++)
+                put(t, 32), put_two(t, 1);
+            put(t, 4);
+            set_two(t, 0, k == 2 ? 65535 : copies(t->bytes + 3, t->bytes + t->length, 1, 1, &after));
+            return 1;
+        }
+        k -= 3;
         if (k < 2) {                                                 /* an object of 300 children « "k": null »: 602 allocations, the room needed and one short */
             put_two(t, 0), put(t, 1), put(t, 64), put_two(t, 1), put(t, 'k'), put_two(t, 300);
             for (n = 0; n < 300; n++)
@@ -2685,6 +2731,7 @@ static int special(text *t, const char *leaf, size_t number)
         case 7: put_two(t, 9); put(t, 1); put(t, 4); put_two(t, 1); put(t, 'k'); put(t, 4); return 1;   /* a byte after the item */
         case 8: put_two(t, 9); put(t, 1); put(t, 32); put_two(t, NOT_A_TEXT); put_two(t, 2); put(t, 4); return 1;
         case 9: put_two(t, 9); put(t, 1); put(t, 64); put_two(t, NOT_A_TEXT); put_two(t, 1); put(t, 4); return 1;   /* a child without its name */
+        case 10: put_two(t, 9); put(t, 1); put(t, 128); put_two(t, NOT_A_TEXT); put_two(t, 2); put(t, 0); put(t, 'b'); return 1;   /* a Raw with a zero byte */
         default: break;
         }
     } else if (!strcmp(leaf, "parse_with_length_opts")) {
@@ -2692,16 +2739,18 @@ static int special(text *t, const char *leaf, size_t number)
            alone, what follows a value (blanks, zeros, a zero then a byte, a byte), the UTF-8 mark (skipped at the start
            only, once, and only when the text is 5 bytes long or more), blanks and zeros before the value; the flag as bytes
            other than 1; the room from 0 to one more than two texts need (the root's item first); the deep ones at the rooms
-           around what they ask before the 1001st container fails; nesting at the limit and past it; the longest text; an
-           answer longer than the answer's buffer (marked: ` stands for a zero byte) */
+           around what they ask before the 1001st container fails; nesting at the limit and past it; the longest text; answers
+           around the answer's buffer's length, and longer (marked: ` stands for a zero byte) */
         static const char *texts[] = {
             "", " ", "  ", "`", "```", " \t\r\n", "1", "1`", "1``", "1`x", "1 ", "1 `", "1` ", "1 2", "1`2", " 1", "`1",
             "`` 1 ``", "[1] x", "[1]`x", "[1]`", "[1] `", "[1]  ", "{}", "{} `", "\"ab\"`", "\"a`b\"", "{\"a`b\":1}`", "nul",
-            "null", "null`", "[", "[ ", "[1,", "{\"a\":", "\xEF\xBB\xBF", "\xEF\xBB\xBF" "1", "\xEF\xBB\xBF" "1 ", "\xEF\xBB\xBF" "1`",
+            "null", "null`", "[", "[ ", "[1,", "{\"a\":", "{\"a\":1,", "{\"a\":1, ", "\xEF\xBB\xBF", "\xEF\xBB\xBF" "1",
+            "\xEF\xBB\xBF" "1 ", "\xEF\xBB\xBF" "1`",
             "\xEF\xBB\xBF 1", "\xEF\xBB\xBF" "12", "\xEF\xBB\xBF[]", "\xEF\xBB\xBF{}`", "\xEF\xBB\xBF\xEF\xBB\xBF" "1 ",
             " \xEF\xBB\xBF" "1  ", "\xEF\xBB" "1  ", "\xEF\xBB\xBF`1`", "\xEF\xBB\xBF ", "\xEF\xBB\xBF  ", "\xEF\xBB\xBF`",
             "-", "-1`", "[]]", "1x", "\"", "0`", "1e5 `x", "[1,2] ` ", "{\"a\":[true,false,null]}`", "\"%d800\"`"};
-        static const struct { size_t arrays; const char *inner; } deep[] = {{1000, ""}, {1001, ""}, {999, "{\"\":[]}"}, {1000, "{}"}};
+        static const struct { size_t arrays; const char *inner; } deep[] = {
+            {1000, ""}, {1001, ""}, {999, "{\"\":[]}"}, {1000, "{}"}};
         static const size_t need[] = {1001, 1001, 1002, 1501, 1301};     /* (parse_value's, and the root's item) */
         static const int flags[] = {2, 128, 255};
         size_t k = number, n;
@@ -2761,6 +2810,14 @@ static int special(text *t, const char *leaf, size_t number)
             return 1;
         }
         k -= 4;
+        if (k < 3) {                                                 /* 33, 34 and 35 ones: an answer a byte short of the answer's buffer, exactly as long, a byte too long (refused) */
+            put_offset(t, 65535), put(t, 0), put(t, '[');
+            for (n = 0; n < 33 + k; n++)
+                puts_in(t, n ? ",1" : "1");
+            put(t, ']');
+            return 1;
+        }
+        k -= 3;
         if (k < 3) {                                                 /* too short: refused */
             for (n = 0; n < k; n++)
                 put(t, 0);

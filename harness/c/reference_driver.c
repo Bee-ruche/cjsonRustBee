@@ -693,5 +693,6 @@ int main(int argc, char **argv)
         free(buffer);
         at += n;
     }
+    free(cases); /* (LeakSanitizer would stop the reference on it, should a build leave no pointer to it on the stack) */
     return (at == (size_t)size && fclose(out) == 0) ? 0 : 3;
 }
