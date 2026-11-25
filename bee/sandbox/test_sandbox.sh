@@ -439,6 +439,72 @@ verdict i2 "the machine's device nodes work inside, and their mode and dates can
   "$([ "$(nodes)" = "$before" ] && [ "$(echo $out)" = 3 ]; echo $?)" "rc $rc, output: $(first_line "$out"); nodes before and after differ: $([ "$(nodes)" = "$before" ] && echo no || echo yes)"
 
 # ---------------------------------------------------------------------------------------------------
+echo "== n. the project's needs: at /needs, read-only, and nothing else of the home"
+# needs_run <folder> <shell script>: runs the script in the sandbox, as `inside` does, in a mount namespace of its
+# own where the home the system's list of users gives (the one the launcher reads: under unshare -r, root's) is a
+# fresh tmpfs holding a copy of <folder>. The machine's own home is neither read nor changed, and that home's mount
+# carries no flag of the machine's (nosuid, nodev) that would stand in for one the launcher forgot. $HOME stays the
+# fixture's, which holds a decoy of the needs. Sets $out and $rc (99: that namespace could not be made), and writes
+# in $top/needs-digests the digest of the project's folder in that home before the run and after it.
+needs_run() {
+  out=$(cd "$repo" && HOME=$home timeout -k 5 120 unshare -rm --propagation private bash -c '
+    digest() { tar -C "$1" -cf - . 2>/dev/null | sha256sum | cut -d" " -f1; }
+    h=$(getent passwd "$(id -u)" | cut -d: -f6) && [ -d "$h" ] && case "$PWD/" in "$h"/*) false ;; esac && mount -t tmpfs -o mode=755 tmpfs "$h" && cp -a "$1/." "$h/" || exit 99
+    f=$h/.hive/needs/bee-ruche/cjsonrustbee; before=$(digest "$f")
+    bee/sandbox/sans-docker.sh sh -c "$2"; rc=$?
+    echo "$before $(digest "$f")" >"$3"; exit $rc' bee-test "$1" "$2" "$top/needs-digests" 2>&1); rc=$?
+}
+unchanged() { read -r before after <"$top/needs-digests" && [ -n "$before" ] && [ "$before" = "$after" ]; }
+# needs_home <folder>: a home whose .hive holds more than this project's needs (another project's, the hive's
+# guide), and a secret beside it.
+needs_home() {
+  mkdir -p "$1/.hive/needs/bee-ruche/other" "$1/.hive/protocol"
+  echo "of another project" >"$1/.hive/needs/bee-ruche/other/x.txt"; echo "print('the hive tool')" >"$1/.hive/protocol/hive.py"
+  echo "token of the user" >"$1/secret.txt"
+}
+fixture
+pw=$top/home-with-needs; needs_home "$pw"; own=$pw/.hive/needs/bee-ruche/cjsonrustbee
+mkdir -p "$own/sub"; echo "the project's data" >"$own/data.bin"; echo "inner" >"$own/sub/inner.txt"; chmod 444 "$own/data.bin" "$own/sub/inner.txt"
+mkdir -p "$home/.hive/needs/bee-ruche/cjsonrustbee"; echo "decoy" >"$home/.hive/needs/bee-ruche/cjsonrustbee/decoy.txt"
+needs_run "$pw" 'cd /needs && find . | sort | tr "\n" " " && cat data.bin'
+if [ "$rc" -eq 99 ]; then
+  skip n "the project's needs at /needs" "no mount namespace of its own for the test: $(first_line "$out")"
+else
+  verdict n1 "the needs are at /needs: the files of the project's folder in the home the system names, not \$HOME's, not the rest of .hive" \
+    "$([ "$rc" -eq 0 ] && [ "$out" = ". ./data.bin ./sub ./sub/inner.txt the project's data" ]; echo $?)" "rc $rc: $(first_line "$out")"
+  way=${repo#/}; way=${way%%/*}
+  needs_run "$pw" 'ls / | tr "\n" " "; echo "|$(ls -A /tmp/home)|"'
+  names=${out%%|*}; extra=$(for name in $names; do case $name in bin|dev|etc|lib*|needs|proc|sbin|tmp|usr|"$way") ;; *) printf '%s ' "$name" ;; esac; done)
+  verdict n2 "nothing else of the home is visible: the root holds needs beside what it held, the home inside is empty" \
+    "$([ "$rc" -eq 0 ] && [[ " $names" == *" needs "* ]] && [ -z "$extra" ] && [ "${out#*|}" = "|" ]; echo $?)" "rc $rc: $(first_line "$out")"
+  needs_run "$pw" 'w=0; for c in "echo x >/needs/new" "echo x >>/needs/data.bin" "echo x >/needs/sub/new" "chmod 666 /needs/data.bin" \
+      "touch /needs/data.bin" "mkdir /needs/folder" "ln -s data.bin /needs/link"; do
+    if sh -c "$c" 2>/dev/null; then w=$((w + 1)); echo "WORKED: $c"; fi; done; exit $w'
+  verdict n3 "nothing in /needs can be written, created, re-moded or re-dated, and the folder is unchanged" "$([ "$rc" -eq 0 ] && unchanged; echo $?)" "rc $rc: $(first_line "$out")"
+  needs_run "$pw" 'w=0; for c in "mv /needs /needs-moved" "rm -rf /needs" "rmdir /needs" "umount /needs" "umount -l /needs" \
+      "mv /needs/data.bin /needs/moved" "rm -f /needs/data.bin" "rm -rf /needs/sub"; do
+    if sh -c "$c" 2>/dev/null; then w=$((w + 1)); echo "WORKED: $c"; fi; done; [ -f /needs/data.bin ] || w=$((w + 1)); exit $w'
+  verdict n4 "/needs can be neither renamed nor removed, nor anything in it, and the folder is unchanged" "$([ "$rc" -eq 0 ] && unchanged; echo $?)" "rc $rc: $(first_line "$out")"
+  needs_run "$pw" 'awk "\$5 == \"/needs\" { print \$6 }" /proc/self/mountinfo'
+  verdict n5 "the mount at /needs is read-only, nosuid and nodev" "$([ "$rc" -eq 0 ] && [ "$(tr , '\n' <<<"$out" | grep -cxE 'ro|nosuid|nodev')" = 3 ]; echo $?)" "rc $rc: $(first_line "$out")"
+  pw=$top/home-without-needs; needs_home "$pw"
+  needs_run "$pw" '[ ! -e /needs ] && echo absent'
+  verdict n6 "no folder of the project's needs: no /needs, and the command runs (a decoy in \$HOME changes nothing)" "$([ "$rc" -eq 0 ] && [ "$out" = absent ]; echo $?)" "rc $rc: $(first_line "$out")"
+  mkdir -p "$top/linked-needs" "$top/linked-hive/needs/bee-ruche/cjsonrustbee"
+  echo "data" >"$top/linked-needs/data.bin"; echo "data" >"$top/linked-hive/needs/bee-ruche/cjsonrustbee/data.bin"
+  pw=$top/home-with-linked-needs; needs_home "$pw"; ln -s "$top/linked-needs" "$pw/.hive/needs/bee-ruche/cjsonrustbee"
+  needs_run "$pw" 'touch ran-with-linked-needs'; rc1=$rc; out1=$out
+  pw=$top/home-with-linked-hive; mkdir -p "$pw"; echo "token of the user" >"$pw/secret.txt"; ln -s "$top/linked-hive" "$pw/.hive"
+  needs_run "$pw" 'touch ran-with-a-linked-hive'
+  verdict n7 "a needs' folder reached through a link (itself, or a folder above it): no run, a reason" \
+    "$([ "$rc1" -eq 125 ] && [ "$rc" -eq 125 ] && [ ! -e "$repo/ran-with-linked-needs" ] && [ ! -e "$repo/ran-with-a-linked-hive" ] &&
+       grep -q "not a plain folder" <<<"$out1" && grep -q "not a plain folder" <<<"$out"; echo $?)" "rc $rc1 and $rc: $(first_line "$out1")"
+  pw=$top/home-with-a-needs-file; needs_home "$pw"; echo "a file" >"$pw/.hive/needs/bee-ruche/cjsonrustbee"
+  needs_run "$pw" 'touch ran-with-a-needs-file'
+  verdict n8 "a needs' path that is a file, not a folder: no run, a reason" "$([ "$rc" -eq 125 ] && [ ! -e "$repo/ran-with-a-needs-file" ] && grep -q "not a plain folder" <<<"$out"; echo $?)" "rc $rc: $(first_line "$out")"
+fi
+
+# ---------------------------------------------------------------------------------------------------
 echo "== x. other checks"
 if command -v script >/dev/null; then
   cat >"$repo/inject.py" <<'EOF'

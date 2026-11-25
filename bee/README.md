@@ -27,3 +27,11 @@ Two forms, the same as for every project of the hive:
   its first lines before running it as root; never for a worker, never on a machine that is not a throwaway). It shows the machine's own `/usr`: it serves this project only
   where `cc`, `rustc` and `ld.lld` live there. A compiler installed in your home folder is not shown inside (the
   home is hidden, on purpose): use the image then.
+
+**The project's needs.** If the project's settings name files or documents (`needs` in `hive/project.json`), the
+hive's tool fetches them into `~/.hive/needs/bee-ruche/cjsonrustbee/`, in the home the system's list of users gives
+(not `$HOME`). Both forms show that folder at `/needs`, read-only, and nothing else of the home: `sans-docker.sh`
+binds it read-only, `nosuid` and `nodev` (it can be neither renamed nor removed, nor anything in it written), and
+refuses to run (status 125) when that folder is reached through a symbolic link or is not a folder; `AGENTS.md`'s
+`docker run` line adds a read-only bind when the folder exists. No folder, no `/needs`. The project declares no
+`needs` today, so nothing changes for it until it does.

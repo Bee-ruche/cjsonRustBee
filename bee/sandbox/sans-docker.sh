@@ -10,6 +10,8 @@
 #     hooks and the rest are not shown (what a command reads, it can copy into the work tree, which
 #     you push);
 #   - an empty /tmp and an empty home (/tmp/home), private, gone when the command ends;
+#   - the project's needs, if the hive's tool fetched any (~/.hive/needs/bee-ruche/cjsonrustbee, in the
+#     home the system's list of users gives), at /needs, read-only; no such folder, no /needs;
 #   - /usr, /bin, /sbin, /lib*, /etc read-only (in /etc, without what only root or a group may read);
 #     /dev reduced to null, zero, full, random, urandom and an empty /dev/shm; a /proc of its own
 #     processes only, read-only;
@@ -53,12 +55,12 @@ readonly_tree() {
 
 # Runs as process 1 of the new namespaces, as root of the user namespace: builds the view, then runs
 # the command as a child without any privilege and waits for it. Arguments: work tree, empty folder
-# for the new root, guarded paths, command.
+# for the new root, guarded paths, descriptors given, the needs' folder (or nothing), command.
 inside() {
   set -Eeuo pipefail
   trap 'refuse "a protection could not be set up ($BASH_COMMAND)"' ERR
   PATH=/usr/sbin:/usr/bin:/sbin:/bin
-  local repo=$1 new=$2 guarded=$3 given=$4 d rest mode drop; shift 4
+  local repo=$1 new=$2 guarded=$3 given=$4 needs=$5 d rest mode drop; shift 5
   for d in mount umount findmnt pivot_root setsid setpriv prlimit stat readlink unshare sed dd; do
     type -P "$d" >/dev/null || refuse "$d not found (util-linux, coreutils)"
   done
@@ -114,6 +116,10 @@ inside() {
   ln -s fd/0 "$new/dev/stdin"; ln -s fd/1 "$new/dev/stdout"; ln -s fd/2 "$new/dev/stderr"
   mkdir "$new/dev/shm"; mount -t tmpfs -o mode=1777,nosuid,nodev tmpfs "$new/dev/shm"
   mount -t tmpfs -o mode=1777,nosuid,nodev tmpfs "$new/tmp"; mkdir "$new/tmp/home"
+  # The project's needs, read-only, and nothing else of the home: a mount point, which can be neither
+  # renamed nor removed, in the read-only root.
+  if [ -n "$needs" ]; then mkdir "$new/needs"; mount --rbind "$needs" "$new/needs"; readonly_tree "$new/needs"
+    mount -o remount,bind,ro,nosuid,nodev "$new/needs"; fi
 
   # The work tree, writable, at its own path: the folders above it are empty, the ones next to it are
   # not there. Each guarded path is bound over itself read-only; the folders above it, inside the
@@ -154,7 +160,7 @@ inside() {
   # Enter the view, drop the machine's own tree, and check the result before trusting it.
   mount -o remount,bind,ro,nosuid,nodev "$new"
   cd "$new"; pivot_root . .; umount -l .; cd "$repo"
-  for d in / /usr /etc /proc/sys $guarded; do
+  for d in / /usr /etc /proc/sys ${needs:+/needs} $guarded; do
     [ ! -w "$d" ] || refuse "$d is writable inside the sandbox"
   done
   [ -w . ] && [ -w /tmp/home ] || refuse "the work tree or /tmp is not writable inside the sandbox"
@@ -209,6 +215,15 @@ if [ -e "$repo/.git" ]; then
     done < <(cd "$repo/.git" && find "${shown[@]}" -type f -links +1 -print0)
   fi
 fi
+# The project's needs (hive/project.json, « needs »): the files the hive's tool fetched and held to their
+# fingerprints, in the folder it keeps for this project in the home of the user this launcher runs as (from the
+# system's list of users, not from $HOME). Shown read-only at /needs, or not at all. A user the list does not
+# name has no such folder: nothing is shown.
+needs=$(getent passwd "$(id -u)" | cut -d: -f6) || needs=
+needs=${needs:+$needs/.hive/needs/bee-ruche/cjsonrustbee}
+if [ -n "$needs" ] && [ -e "$needs" ]; then
+  [ "$(realpath -- "$needs")" = "$needs" ] && [ -d "$needs" ] || refuse "the needs' folder is not a plain folder"
+else needs=; fi
 for new in /tmp /var/tmp /mnt ""; do   # an existing folder that is not above the work tree
   if [ -d "$new" ] && [[ $repo/ != "$new"/* ]]; then break; fi
 done
@@ -263,7 +278,7 @@ child=
 trap 'kid=$(cat "/proc/$child/task/$child/children" 2>/dev/null) || kid=; kill -KILL ${kid:-$child} 2>/dev/null || true' HUP INT QUIT TERM
 # (--norc: a bash given a command reads a start-up file of the home when its input is a network connection.)
 setpriv --pdeathsig KILL "${spaces[@]}" -- env -i TERM="${TERM:-dumb}" bash --norc --noprofile -c \
-  "$(declare -f refuse readonly_tree inside); inside \"\$@\"" bee-sandbox "$repo" "$new" "${guarded[*]}" "$given" "$@" <&0 &
+  "$(declare -f refuse readonly_tree inside); inside \"\$@\"" bee-sandbox "$repo" "$new" "${guarded[*]}" "$given" "$needs" "$@" <&0 &
 child=$!
 wait "$child" && status=0 || status=$?
 wait "$child" 2>/dev/null || true   # a trapped signal interrupts the first wait: collect the sandbox

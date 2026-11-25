@@ -23,10 +23,14 @@ Check your leaf **in the sandbox only**, from the root of the clone (it builds a
 
 ```bash
 docker build -t bee-cjson bee/sandbox    # with network: the image holds a system and its compilers, nothing of the project; a worker builds it only right after `hive start` printed `STARTED`, before any project code ran since; anyone else, from a fresh clone
+needs=$(getent passwd "$(id -u)" | cut -d: -f6)/.hive/needs/bee-ruche/cjsonrustbee; mounts=()
+[ -d "$needs" ] && mounts+=(--mount "type=bind,source=$needs,target=/needs,readonly")
 docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges --user 65534:65534 \
-  --tmpfs /tmp:rw,exec,size=512m -e HOME=/tmp \
+  --tmpfs /tmp:rw,exec,size=512m -e HOME=/tmp "${mounts[@]}" \
   --mount type=bind,source="$PWD",target=/work,readonly -w /work bee-cjson sh bee/check.sh <leaf>
 ```
+
+The first two lines show the project's needs, the files the hive's tool fetched for it into `~/.hive/needs/bee-ruche/cjsonrustbee/` (in the home the system's list of users gives), at `/needs`, read-only, when that folder exists; nothing else of your home. The project declares no `needs` today: there is no such folder, and the command is the same as without those lines.
 
 On a Linux machine whose own `/usr` holds `cc`, `rustc` and `ld.lld`, `bee/sandbox/sans-docker.sh sh bee/check.sh <leaf>` does the same without Docker, with every file of the project read-only but the leaves of `port/src/` ([bee/README.md](bee/README.md)).
 
