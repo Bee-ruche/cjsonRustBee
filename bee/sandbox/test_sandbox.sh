@@ -440,31 +440,49 @@ verdict i2 "the machine's device nodes work inside, and their mode and dates can
 
 # ---------------------------------------------------------------------------------------------------
 echo "== n. the project's needs: at /needs, read-only, and nothing else of the home"
-# needs_run <folder> <shell script>: runs the script in the sandbox, as `inside` does, in a mount namespace of its
-# own where the home the system's list of users gives (the one the launcher reads: under unshare -r, root's) is a
+# needs_run <folder> <shell script> [setup]: runs the script in the sandbox, as `inside` does, in a mount namespace of
+# its own where the home the system's list of users gives (the one the launcher reads: under unshare -r, root's) is a
 # fresh tmpfs holding a copy of <folder>. The machine's own home is neither read nor changed, and that home's mount
 # carries no flag of the machine's (nosuid, nodev) that would stand in for one the launcher forgot. $HOME stays the
-# fixture's, which holds a decoy of the needs. Sets $out and $rc (99: that namespace could not be made), and writes
-# in $top/needs-digests the digest of the project's folder in that home before the run and after it.
+# fixture's, which holds a decoy of the needs. The setup, if given, is run first in that namespace, with $h the home
+# and $f the project's folder in it. Sets $out and $rc (99: that namespace could not be made), and writes in
+# $top/needs-digests the digest of the project's folder (with the mounts below it) before the run and after it.
 needs_run() {
   out=$(cd "$repo" && HOME=$home timeout -k 5 120 unshare -rm --propagation private bash -c '
     digest() { tar -C "$1" -cf - . 2>/dev/null | sha256sum | cut -d" " -f1; }
     h=$(getent passwd "$(id -u)" | cut -d: -f6) && [ -d "$h" ] && case "$PWD/" in "$h"/*) false ;; esac && mount -t tmpfs -o mode=755 tmpfs "$h" && cp -a "$1/." "$h/" || exit 99
-    f=$h/.hive/needs/bee-ruche/cjsonrustbee; before=$(digest "$f")
+    f=$h/.hive/needs/bee-ruche/cjsonrustbee; eval "$4" || exit 98; before=$(digest "$f")
     bee/sandbox/sans-docker.sh sh -c "$2"; rc=$?
-    echo "$before $(digest "$f")" >"$3"; exit $rc' bee-test "$1" "$2" "$top/needs-digests" 2>&1); rc=$?
+    echo "$before $(digest "$f")" >"$3"; exit $rc' bee-test "$1" "$2" "$top/needs-digests" "${3:-}" 2>&1); rc=$?
 }
 unchanged() { read -r before after <"$top/needs-digests" && [ -n "$before" ] && [ "$before" = "$after" ]; }
+# attempt <script> <setup> <command…>: runs the script in the sandbox (needs_run, with $pw) with the commands as its
+# arguments. $tries tries each of them and exits with the number of those that worked.
+tried='w=0; for c in "$@"; do if sh -c "$c" 2>/dev/null; then w=$((w + 1)); echo "WORKED: $c"; fi; done;'
+tries="$tried exit \$w"
+attempt() { local script=$1 setup=$2; shift 2; needs_run "$pw" "set -- $(printf '%q ' "$@"); $script" "$setup"; }
 # needs_home <folder>: a home whose .hive holds more than this project's needs (another project's, the hive's
 # guide), and a secret beside it.
 needs_home() {
-  mkdir -p "$1/.hive/needs/bee-ruche/other" "$1/.hive/protocol"
+  mkdir -p "$1/.hive/needs/bee-ruche/other" "$1/.hive/protocol"; chmod 755 "$1/.hive" "$1/.hive/needs" "$1/.hive/needs/bee-ruche"
   echo "of another project" >"$1/.hive/needs/bee-ruche/other/x.txt"; echo "print('the hive tool')" >"$1/.hive/protocol/hive.py"
   echo "token of the user" >"$1/secret.txt"
+}
+# What the mounts at /needs and below it are: one line each, its path and its flags.
+mounts_below='awk "\$5 == \"/needs\" || index(\$5, \"/needs/\") == 1 { print \$5, \$6 }" /proc/self/mountinfo'
+# Two mounts below the project's folder: a tmpfs (t) and a bind of another folder of the home (b).
+submounts='mkdir -p "$f/t" "$f/b" "$h/elsewhere" && echo e >"$h/elsewhere/e.txt" && mount -t tmpfs -o mode=755 tmpfs "$f/t" && echo t >"$f/t/t.txt" && mount --bind "$h/elsewhere" "$f/b"'
+# every_line_ro <lines> <count>: <count> lines, each of a mount read-only, nosuid and nodev.
+every_line_ro() {
+  local _path flags bad=
+  [ "$(grep -c . <<<"$1")" = "$2" ] || return 1
+  while read -r _path flags; do [ "$(tr , '\n' <<<"$flags" | grep -cxE 'ro|nosuid|nodev')" = 3 ] || bad=1; done <<<"$1"
+  [ -z "$bad" ]
 }
 fixture
 pw=$top/home-with-needs; needs_home "$pw"; own=$pw/.hive/needs/bee-ruche/cjsonrustbee
 mkdir -p "$own/sub"; echo "the project's data" >"$own/data.bin"; echo "inner" >"$own/sub/inner.txt"; chmod 444 "$own/data.bin" "$own/sub/inner.txt"
+chmod 755 "$own" "$own/sub"
 mkdir -p "$home/.hive/needs/bee-ruche/cjsonrustbee"; echo "decoy" >"$home/.hive/needs/bee-ruche/cjsonrustbee/decoy.txt"
 needs_run "$pw" 'cd /needs && find . | sort | tr "\n" " " && cat data.bin'
 if [ "$rc" -eq 99 ]; then
@@ -477,31 +495,58 @@ else
   names=${out%%|*}; extra=$(for name in $names; do case $name in bin|dev|etc|lib*|needs|proc|sbin|tmp|usr|"$way") ;; *) printf '%s ' "$name" ;; esac; done)
   verdict n2 "nothing else of the home is visible: the root holds needs beside what it held, the home inside is empty" \
     "$([ "$rc" -eq 0 ] && [[ " $names" == *" needs "* ]] && [ -z "$extra" ] && [ "${out#*|}" = "|" ]; echo $?)" "rc $rc: $(first_line "$out")"
-  needs_run "$pw" 'w=0; for c in "echo x >/needs/new" "echo x >>/needs/data.bin" "echo x >/needs/sub/new" "chmod 666 /needs/data.bin" \
-      "touch /needs/data.bin" "mkdir /needs/folder" "ln -s data.bin /needs/link"; do
-    if sh -c "$c" 2>/dev/null; then w=$((w + 1)); echo "WORKED: $c"; fi; done; exit $w'
+  attempt "$tries" "" "echo x >/needs/new" "echo x >>/needs/data.bin" "echo x >/needs/sub/new" "chmod 666 /needs/data.bin" \
+    "touch /needs/data.bin" "mkdir /needs/folder" "ln -s data.bin /needs/link"
   verdict n3 "nothing in /needs can be written, created, re-moded or re-dated, and the folder is unchanged" "$([ "$rc" -eq 0 ] && unchanged; echo $?)" "rc $rc: $(first_line "$out")"
-  needs_run "$pw" 'w=0; for c in "mv /needs /needs-moved" "rm -rf /needs" "rmdir /needs" "umount /needs" "umount -l /needs" \
-      "mv /needs/data.bin /needs/moved" "rm -f /needs/data.bin" "rm -rf /needs/sub"; do
-    if sh -c "$c" 2>/dev/null; then w=$((w + 1)); echo "WORKED: $c"; fi; done; [ -f /needs/data.bin ] || w=$((w + 1)); exit $w'
+  attempt "$tried"' [ -f /needs/data.bin ] || w=$((w + 1)); exit $w' "" "mv /needs /needs-moved" "rm -rf /needs" "rmdir /needs" "umount /needs" "umount -l /needs" \
+    "mv /needs/data.bin /needs/moved" "rm -f /needs/data.bin" "rm -rf /needs/sub"
   verdict n4 "/needs can be neither renamed nor removed, nor anything in it, and the folder is unchanged" "$([ "$rc" -eq 0 ] && unchanged; echo $?)" "rc $rc: $(first_line "$out")"
-  needs_run "$pw" 'awk "\$5 == \"/needs\" { print \$6 }" /proc/self/mountinfo'
-  verdict n5 "the mount at /needs is read-only, nosuid and nodev" "$([ "$rc" -eq 0 ] && [ "$(tr , '\n' <<<"$out" | grep -cxE 'ro|nosuid|nodev')" = 3 ]; echo $?)" "rc $rc: $(first_line "$out")"
+  needs_run "$pw" "$mounts_below" "$submounts"
+  verdict n5 "every mount at /needs and below it (a tmpfs, a bind) is read-only, nosuid and nodev" "$([ "$rc" -eq 0 ] && every_line_ro "$out" 3; echo $?)" "rc $rc: $(printf '%s' "$out" | tr '\n' ';' | cut -c1-110)"
+  attempt "$tries" "$submounts" "echo x >/needs/t/new" "echo x >>/needs/t/t.txt" "chmod 666 /needs/t/t.txt" "rm -f /needs/t/t.txt" \
+    "mv /needs/t/t.txt /needs/t/moved" "echo x >/needs/b/new" "rm -f /needs/b/e.txt" "mv /needs/t /needs/t2" "rmdir /needs/b" "umount /needs/t" "umount -l /needs/b"
+  verdict n9 "in the mounts below /needs too, nothing can be written, removed, renamed or unmounted, and the folder is unchanged" "$([ "$rc" -eq 0 ] && unchanged; echo $?)" "rc $rc: $(first_line "$out")"
+  needs_run "$pw" "cat /needs/data.bin; $mounts_below" 'mount -o remount,bind,noexec,noatime,nodiratime "$h"'
+  verdict n10 "a home mounted noexec, noatime, nodiratime (flags the kernel locks): /needs is shown, read-only, nosuid, nodev" \
+    "$([ "$rc" -eq 0 ] && [ "$(head -n 1 <<<"$out")" = "the project's data" ] && every_line_ro "$(tail -n +2 <<<"$out")" 1; echo $?)" "rc $rc: $(printf '%s' "$out" | tr '\n' ';' | cut -c1-110)"
   pw=$top/home-without-needs; needs_home "$pw"
   needs_run "$pw" '[ ! -e /needs ] && echo absent'
   verdict n6 "no folder of the project's needs: no /needs, and the command runs (a decoy in \$HOME changes nothing)" "$([ "$rc" -eq 0 ] && [ "$out" = absent ]; echo $?)" "rc $rc: $(first_line "$out")"
-  mkdir -p "$top/linked-needs" "$top/linked-hive/needs/bee-ruche/cjsonrustbee"
-  echo "data" >"$top/linked-needs/data.bin"; echo "data" >"$top/linked-hive/needs/bee-ruche/cjsonrustbee/data.bin"
+  mkdir -p "$top/linked-needs" "$top/linked-hive/needs/bee-ruche/cjsonrustbee"; chmod -R 755 "$top/linked-needs" "$top/linked-hive"
+  echo "linked" >"$top/linked-needs/data.bin"; echo "linked" >"$top/linked-hive/needs/bee-ruche/cjsonrustbee/data.bin"
   pw=$top/home-with-linked-needs; needs_home "$pw"; ln -s "$top/linked-needs" "$pw/.hive/needs/bee-ruche/cjsonrustbee"
   needs_run "$pw" 'touch ran-with-linked-needs'; rc1=$rc; out1=$out
+  pw=$top/home-with-a-dangling-link; needs_home "$pw"; ln -s "$top/no-such-folder" "$pw/.hive/needs/bee-ruche/cjsonrustbee"
+  needs_run "$pw" 'touch ran-with-a-dangling-link'; rc2=$rc; out2=$out
   pw=$top/home-with-linked-hive; mkdir -p "$pw"; echo "token of the user" >"$pw/secret.txt"; ln -s "$top/linked-hive" "$pw/.hive"
   needs_run "$pw" 'touch ran-with-a-linked-hive'
-  verdict n7 "a needs' folder reached through a link (itself, or a folder above it): no run, a reason" \
-    "$([ "$rc1" -eq 125 ] && [ "$rc" -eq 125 ] && [ ! -e "$repo/ran-with-linked-needs" ] && [ ! -e "$repo/ran-with-a-linked-hive" ] &&
-       grep -q "not a plain folder" <<<"$out1" && grep -q "not a plain folder" <<<"$out"; echo $?)" "rc $rc1 and $rc: $(first_line "$out1")"
+  verdict n7 "a needs' path that is a link (to a folder, or dangling) or below one (.hive): no run, a reason" \
+    "$([ "$rc1" -eq 125 ] && [ "$rc2" -eq 125 ] && [ "$rc" -eq 125 ] && [ ! -e "$repo/ran-with-linked-needs" ] && [ ! -e "$repo/ran-with-a-dangling-link" ] && [ ! -e "$repo/ran-with-a-linked-hive" ] &&
+       grep -q "not a plain folder" <<<"$out1" && grep -q "not a plain folder" <<<"$out2" && grep -q "not a plain folder" <<<"$out"; echo $?)" "rc $rc1, $rc2 and $rc: $(first_line "$out1")"
   pw=$top/home-with-a-needs-file; needs_home "$pw"; echo "a file" >"$pw/.hive/needs/bee-ruche/cjsonrustbee"
   needs_run "$pw" 'touch ran-with-a-needs-file'
   verdict n8 "a needs' path that is a file, not a folder: no run, a reason" "$([ "$rc" -eq 125 ] && [ ! -e "$repo/ran-with-a-needs-file" ] && grep -q "not a plain folder" <<<"$out"; echo $?)" "rc $rc: $(first_line "$out")"
+  # The folder checked outside is swapped for a link to another folder just before the launcher binds it: a stand-in
+  # for mount(8), bound over it in the test's namespace, does the swap when it is asked to bind the needs' folder.
+  pw=$top/home-with-needs; cp /usr/bin/mount "$top/real-mount"
+  printf '#!/bin/sh\nf=$(getent passwd "$(id -u)" | cut -d: -f6)/.hive/needs/bee-ruche/cjsonrustbee\nif [ "$1" = --rbind ] && [ "$2" = "$f" ] && [ ! -L "$f" ]; then mv "$f" "$f.swapped" && ln -s %q "$f"; fi\nexec %q "$@"\n' \
+    "$top/linked-needs" "$top/real-mount" >"$top/swapping-mount"; chmod 755 "$top/swapping-mount"
+  needs_run "$pw" 'cat /needs/data.bin; touch ran-with-a-swapped-folder' "mount --bind $(printf %q "$top/swapping-mount") /usr/bin/mount"
+  verdict n11 "the needs' folder swapped for a link between the check and the bind: no run, a reason" \
+    "$([ "$rc" -eq 125 ] && [ ! -e "$repo/ran-with-a-swapped-folder" ] && grep -q "changed while the sandbox was being built" <<<"$out"; echo $?)" "rc $rc: $(first_line "$out")"
+  needs_run "$pw" 'touch ran-with-a-777-folder' 'chmod 777 "$f"'; rc1=$rc; out1=$out
+  needs_run "$pw" 'touch ran-with-a-775-parent' 'chmod 775 "${f%/*}"'
+  verdict n12 "a needs' folder others may write to (777), or the folder above it a group may write to (775): no run, a reason" \
+    "$([ "$rc1" -eq 125 ] && [ "$rc" -eq 125 ] && [ ! -e "$repo/ran-with-a-777-folder" ] && [ ! -e "$repo/ran-with-a-775-parent" ] && grep -q "a group or others may write" <<<"$out1" &&
+       grep -q "a group or others may write" <<<"$out"; echo $?)" "rc $rc1 and $rc: $(first_line "$out1")"
+  if [ "$uid" -eq 0 ]; then
+    pw=$top/home-of-another-owner; needs_home "$pw"; mkdir -p "$pw/.hive/needs/bee-ruche/cjsonrustbee"; chmod 755 "$pw/.hive/needs/bee-ruche/cjsonrustbee"
+    echo "data" >"$pw/.hive/needs/bee-ruche/cjsonrustbee/data.bin"; chown -R 65533:65533 "$pw/.hive/needs/bee-ruche/cjsonrustbee"
+    needs_run "$top/home-without-needs" 'touch ran-with-another-owner' "mount --bind $(printf %q "$pw") \"\$h\""
+    verdict n13 "a needs' folder that is not the user's own: no run, a reason" "$([ "$rc" -eq 125 ] && [ ! -e "$repo/ran-with-another-owner" ] && grep -q "is not your own" <<<"$out"; echo $?)" "rc $rc: $(first_line "$out")"
+  else
+    skip n13 "a needs' folder that is not the user's own" "not root: the test cannot give a folder to another user"
+  fi
 fi
 
 # ---------------------------------------------------------------------------------------------------

@@ -44,23 +44,25 @@ guarded=(.git .github .claude .mcp.json AGENTS.md CLAUDE.md bee reference harnes
 
 refuse() { echo "bee-sandbox: $*: the command was NOT run." >&2; exit 125; }
 
-# Makes the mount at $1 and the mounts below it read-only. The flags the kernel has locked (nosuid,
-# nodev, noexec) are given again: mount(2) refuses a remount that would drop them.
+# Makes the mount at $1 and the mounts below it read-only, each with the flags of $2 besides (nosuid,nodev),
+# if given. The flags the kernel has locked (nosuid, nodev, noexec, noatime…) are given again: mount(2)
+# refuses a remount that would drop them.
 readonly_tree() {
   local target options
   findmnt -Rrno TARGET,VFS-OPTIONS -M "$1" | while read -r target options; do
-    mount -o "remount,bind,${options/#rw/ro}" "$(printf %b "$target")" || exit
+    mount -o "remount,bind,${options/#rw/ro}${2:+,$2}" "$(printf %b "$target")" || exit
   done
 }
 
 # Runs as process 1 of the new namespaces, as root of the user namespace: builds the view, then runs
 # the command as a child without any privilege and waits for it. Arguments: work tree, empty folder
-# for the new root, guarded paths, descriptors given, the needs' folder (or nothing), command.
+# for the new root, guarded paths, descriptors given, the needs' folder (or nothing), its device and
+# inode as checked outside, command.
 inside() {
   set -Eeuo pipefail
   trap 'refuse "a protection could not be set up ($BASH_COMMAND)"' ERR
   PATH=/usr/sbin:/usr/bin:/sbin:/bin
-  local repo=$1 new=$2 guarded=$3 given=$4 needs=$5 d rest mode drop; shift 5
+  local repo=$1 new=$2 guarded=$3 given=$4 needs=$5 needs_id=$6 d rest mode drop; shift 6
   for d in mount umount findmnt pivot_root setsid setpriv prlimit stat readlink unshare sed dd; do
     type -P "$d" >/dev/null || refuse "$d not found (util-linux, coreutils)"
   done
@@ -116,10 +118,12 @@ inside() {
   ln -s fd/0 "$new/dev/stdin"; ln -s fd/1 "$new/dev/stdout"; ln -s fd/2 "$new/dev/stderr"
   mkdir "$new/dev/shm"; mount -t tmpfs -o mode=1777,nosuid,nodev tmpfs "$new/dev/shm"
   mount -t tmpfs -o mode=1777,nosuid,nodev tmpfs "$new/tmp"; mkdir "$new/tmp/home"
-  # The project's needs, read-only, and nothing else of the home: a mount point, which can be neither
-  # renamed nor removed, in the read-only root.
-  if [ -n "$needs" ]; then mkdir "$new/needs"; mount --rbind "$needs" "$new/needs"; readonly_tree "$new/needs"
-    mount -o remount,bind,ro,nosuid,nodev "$new/needs"; fi
+  # The project's needs, read-only, nosuid and nodev, every mount below them too, and nothing else of the
+  # home: a mount point, which can be neither renamed nor removed, in the read-only root. What was bound
+  # must be the folder checked outside, not what a link put in its place since.
+  if [ -n "$needs" ]; then mkdir "$new/needs"; mount --rbind "$needs" "$new/needs"
+    [ "$(stat -c %d:%i "$new/needs")" = "$needs_id" ] || refuse "the needs' folder changed while the sandbox was being built"
+    readonly_tree "$new/needs" nosuid,nodev; fi
 
   # The work tree, writable, at its own path: the folders above it are empty, the ones next to it are
   # not there. Each guarded path is bound over itself read-only; the folders above it, inside the
@@ -218,11 +222,18 @@ fi
 # The project's needs (hive/project.json, « needs »): the files the hive's tool fetched and held to their
 # fingerprints, in the folder it keeps for this project in the home of the user this launcher runs as (from the
 # system's list of users, not from $HOME). Shown read-only at /needs, or not at all. A user the list does not
-# name has no such folder: nothing is shown.
+# name has no such folder: nothing is shown. A link there, or above it, is refused, and so is a folder (or the one
+# above it) that is not the user's own or that a group or others may write to: the tool makes them 0755.
 needs=$(getent passwd "$(id -u)" | cut -d: -f6) || needs=
-needs=${needs:+$needs/.hive/needs/bee-ruche/cjsonrustbee}
-if [ -n "$needs" ] && [ -e "$needs" ]; then
+needs=${needs:+${needs%/}/.hive/needs/bee-ruche/cjsonrustbee}
+needs_id=
+if [ -n "$needs" ] && { [ -e "$needs" ] || [ -L "$needs" ]; }; then
   [ "$(realpath -- "$needs")" = "$needs" ] && [ -d "$needs" ] || refuse "the needs' folder is not a plain folder"
+  for path in "$needs" "${needs%/*}"; do
+    [ "$(stat -c %u -- "$path")" = "$(id -u)" ] && [ $((0$(stat -c %a -- "$path") & 022)) = 0 ] \
+      || refuse "$path is not your own, or a group or others may write to it"
+  done
+  needs_id=$(stat -c %d:%i -- "$needs")
 else needs=; fi
 for new in /tmp /var/tmp /mnt ""; do   # an existing folder that is not above the work tree
   if [ -d "$new" ] && [[ $repo/ != "$new"/* ]]; then break; fi
@@ -278,7 +289,7 @@ child=
 trap 'kid=$(cat "/proc/$child/task/$child/children" 2>/dev/null) || kid=; kill -KILL ${kid:-$child} 2>/dev/null || true' HUP INT QUIT TERM
 # (--norc: a bash given a command reads a start-up file of the home when its input is a network connection.)
 setpriv --pdeathsig KILL "${spaces[@]}" -- env -i TERM="${TERM:-dumb}" bash --norc --noprofile -c \
-  "$(declare -f refuse readonly_tree inside); inside \"\$@\"" bee-sandbox "$repo" "$new" "${guarded[*]}" "$given" "$needs" "$@" <&0 &
+  "$(declare -f refuse readonly_tree inside); inside \"\$@\"" bee-sandbox "$repo" "$new" "${guarded[*]}" "$given" "$needs" "$needs_id" "$@" <&0 &
 child=$!
 wait "$child" && status=0 || status=$?
 wait "$child" 2>/dev/null || true   # a trapped signal interrupts the first wait: collect the sandbox

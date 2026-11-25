@@ -15,7 +15,7 @@ Two forms, the same as for every project of the hive:
 
 - **The image** (`sandbox/Dockerfile`): the system and the compilers the judge uses for this project. `AGENTS.md`
   gives the two commands: build the image (with network; it holds nothing of the project), then run the check in
-  it without network, the clone mounted read-only.
+  it with `sandbox/docker.sh`: without network, the clone mounted read-only.
 - **Without Docker** (`sandbox/sans-docker.sh <command>`, Linux): no network, none of your environment, an empty
   home; the work tree is the one writable place, but for its guarded paths, read-only there: `.git` (its history
   only), `.github`, `.claude`, `.mcp.json`, `AGENTS.md`, `CLAUDE.md`, what the project's settings protect (`bee/`,
@@ -30,8 +30,13 @@ Two forms, the same as for every project of the hive:
 
 **The project's needs.** If the project's settings name files or documents (`needs` in `hive/project.json`), the
 hive's tool fetches them into `~/.hive/needs/bee-ruche/cjsonrustbee/`, in the home the system's list of users gives
-(not `$HOME`). Both forms show that folder at `/needs`, read-only, and nothing else of the home: `sans-docker.sh`
-binds it read-only, `nosuid` and `nodev` (it can be neither renamed nor removed, nor anything in it written), and
-refuses to run (status 125) when that folder is reached through a symbolic link or is not a folder; `AGENTS.md`'s
-`docker run` line adds a read-only bind when the folder exists. No folder, no `/needs`. The project declares no
-`needs` today, so nothing changes for it until it does.
+(not `$HOME`). Both forms show that folder at `/needs`, read-only, and nothing else of the home; no folder, no
+`/needs`. Both refuse to run (status 125) when it is reached through a symbolic link (there or above it), is not a
+folder, or when it or the folder above it is not yours or may be written by a group or others (the tool makes them
+0755). `sans-docker.sh` binds it read-only, `nosuid` and `nodev`, every mount below it too (it can be neither renamed
+nor removed, nor anything in it written), and refuses if what it bound is not the folder it checked. `docker.sh`
+binds it read-only and runs the command as user 65534: it refuses a folder or a file of the needs that others
+cannot read (folders 0755, files 0444, as the tool makes them), and a path with a comma or a quote, which docker's
+`--mount` cannot take. Both find the home with `getent`, which macOS lacks:
+there `docker.sh` shows no `/needs`. The project declares no `needs` today, so nothing changes for it until it does.
+
