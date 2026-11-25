@@ -26,7 +26,8 @@ fixture() {
   mkdir -p "$home/.hive/needs/bee-ruche/cjsonrustbee" "$repo/bee/sandbox"
   echo "decoy" >"$home/.hive/needs/bee-ruche/cjsonrustbee/decoy.txt"
   cp "$launcher" "$repo/bee/sandbox/docker.sh"; chmod +x "$repo/bee/sandbox/docker.sh"
-  printf '#!/bin/sh\nprintf "%%s\\n" "$@" >%q\nexit 7\n' "$top/docker-args" >"$top/stand-in-docker"; chmod 755 "$top/stand-in-docker"
+  printf '#!/bin/sh\nprintf "%%s\\n" "$@" >%q\necho "$PATH|$MSYS_NO_PATHCONV" >%q\nexit 7\n' "$top/docker-args" "$top/docker-path" >"$top/stand-in-docker"
+  chmod 755 "$top/stand-in-docker"
   pw=$top/home-with-needs; own=$pw/.hive/needs/bee-ruche/cjsonrustbee
   mkdir -p "$own/sub" "$pw/.hive/needs/bee-ruche/other"; echo "of another project" >"$pw/.hive/needs/bee-ruche/other/x.txt"
   echo "the project's data" >"$own/data.bin"; echo "inner" >"$own/sub/inner.txt"
@@ -35,15 +36,21 @@ fixture() {
 # run_form <home folder> <setup> <command…>: the launcher of the fixture, from its work tree, with the fixture's $HOME;
 # the setup is run first in the test's namespace, with $h the home and $f the project's folder in it. Sets $out, $rc
 # (99, 98: the namespace or the setup failed) and $args (what docker was given, one per line; empty: not run).
+# The stand-in for docker is put where the system keeps docker (/usr/bin if it has one, else /usr/local/bin), and the
+# caller's PATH is /usr/local/bin:/usr/bin:/bin, unless $stand_in is "elsewhere" (nowhere of the system's) and
+# $caller_path says otherwise.
 run_form() {
   local folder=$1 setup=$2; shift 2
-  rm -f "$top/docker-args"
+  rm -f "$top/docker-args" "$top/docker-path"
   out=$(cd "$repo" && HOME=$home timeout -k 5 60 unshare -rm --propagation private bash -c '
     h=$(getent passwd "$(id -u)" | cut -d: -f6) && [ -d "$h" ] && mount -t tmpfs -o mode=755 tmpfs "$h" && cp -a "$1/." "$h/" || exit 99
-    if [ -e /usr/bin/docker ]; then mount --bind "$2" /usr/bin/docker
-    else mount -t tmpfs -o mode=755 tmpfs /usr/local/bin && cp "$2" /usr/local/bin/docker; fi || exit 99
-    f=$h/.hive/needs/bee-ruche/cjsonrustbee; eval "$3" || exit 98; shift 3
-    exec bee/sandbox/docker.sh "$@"' bee-test "$folder" "$top/stand-in-docker" "$setup" "$@" 2>&1); rc=$?
+    if [ "$4" = system ]; then
+      if [ -e /usr/bin/docker ]; then mount --bind "$2" /usr/bin/docker
+      else mount -t tmpfs -o mode=755 tmpfs /usr/local/bin && cp "$2" /usr/local/bin/docker; fi || exit 99
+    fi
+    f=$h/.hive/needs/bee-ruche/cjsonrustbee; eval "$3" || exit 98; PATH=$5; shift 5
+    exec bee/sandbox/docker.sh "$@"' bee-test "$folder" "$top/stand-in-docker" "$setup" "${stand_in:-system}" \
+    "${caller_path:-/usr/local/bin:/usr/bin:/bin}" "$@" 2>&1); rc=$?
   args=$(cat "$top/docker-args" 2>/dev/null)
 }
 # The arguments docker is given without needs, for a work tree at $repo and the command `sh -c 'echo a  b'`.
@@ -95,6 +102,17 @@ if [ "$uid" -eq 0 ]; then
 else
   skip k12 "a needs' folder that is not the user's own" "not root: the test cannot give a folder to another user"
 fi
+# Docker where the caller's PATH names it, as Docker Desktop, Homebrew, snap or Nix put it: found there.
+mkdir -p "$top/tools" "$repo/bin" "$repo/tools"
+cp "$top/stand-in-docker" "$top/tools/docker"; cp "$top/stand-in-docker" "$repo/bin/docker"; cp "$top/stand-in-docker" "$repo/tools/docker"
+stand_in=elsewhere caller_path="bin:$top/tools:$repo/tools:/usr/bin:/bin" run_form "$top/home-without-needs" "" sh -c 'echo a  b'
+verdict k14 "a docker in a folder of the caller's PATH that is none of the system's: it is the one run, with that PATH less its relative and work-tree folders" \
+  "$([ "$rc" -eq 7 ] && [ "$args" = "$(plain_args)" ] && [ "$(cat "$top/docker-path")" = "$top/tools:/usr/bin:/bin|1" ]; echo $?)" \
+  "rc $rc, PATH and MSYS_NO_PATHCONV given to docker: $(cat "$top/docker-path" 2>/dev/null): $(first_line "$out")"
+# (No folder of the system's on these PATHs: a docker the machine has is never reached.)
+stand_in=elsewhere caller_path="bin" refused k15 "a docker named only by a relative folder of the PATH (bin, the work tree's): not run" "no docker on your PATH" "$pw" ""
+stand_in=elsewhere caller_path="$repo/tools" refused k16 "a docker only in the work tree, named by an absolute folder of the PATH: not run" "no docker on your PATH" "$pw" ""
+stand_in=elsewhere caller_path="$top/no-such-folder" refused k17 "no docker on the PATH: a reason, status 125" "no docker on your PATH" "$pw" ""
 fixture "work,tree"
 refused k13 "a work tree whose path holds a comma: docker is not run" "a comma, a quote" "$pw" ""
 

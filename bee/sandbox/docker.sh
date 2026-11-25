@@ -10,11 +10,15 @@
 #
 # If the needs' folder cannot be shown as it must be, the command is NOT run: exit status 125 and the reason on
 # stderr. Otherwise the exit status is docker's (the command's). The work tree is the folder this launcher sits in
-# (<work tree>/bee/sandbox/): git is not asked. Needs bash, coreutils, findutils, getent and docker. Like
-# sans-docker.sh it takes nothing from the work tree nor from the caller's settings: bash is started with -p and the
-# tools are found in the system's own folders (docker in /usr/local/bin too, where some installers put it).
+# (<work tree>/bee/sandbox/): git is not asked. Needs bash, coreutils, findutils and docker; getent to show the needs
+# (without it, as on macOS or Git Bash, there is no /needs). It takes nothing from the work tree: bash is started with
+# -p (no start-up file, no function of the environment); every tool of this script is found in the system's own
+# folders; docker is the caller's: found on the caller's PATH and run with it, less any folder of it that is relative
+# or in the work tree (Docker Desktop's docker is a script that runs docker.exe from the PATH; credential helpers and
+# plugins are found there too), and its own settings (DOCKER_HOST, DOCKER_CONTEXT, DOCKER_CONFIG) are the caller's.
 set -euo pipefail
-PATH=/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/bin
+caller_path=$PATH
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
 
 refuse() { echo "bee-sandbox: $*: the command was NOT run." >&2; exit 125; }
 # Docker reads --mount as comma-separated values: a path holding a comma, a quote or a control character would end
@@ -26,12 +30,19 @@ here=$(realpath -- "${BASH_SOURCE[0]}")
 [[ $here == /?*/bee/sandbox/* ]] || refuse "this launcher is not in <work tree>/bee/sandbox/"
 repo=${here%/bee/sandbox/*}
 plain "$repo" "the work tree's path"
+docker_path=
+IFS=: read -r -a parts <<<"$caller_path"
+for part in ${parts[@]+"${parts[@]}"}; do
+  if [[ $part == /* && $part != "$repo" && $part != "$repo"/* ]]; then docker_path+=${docker_path:+:}$part; fi
+done
+docker=$(PATH=$docker_path command -v docker) && [[ $docker == /* ]] \
+  || refuse "no docker on your PATH (its folders that are absolute and outside the work tree: ${docker_path:-none})"
 
 # The project's needs, as sans-docker.sh finds and checks them: a link there or above it, or a folder (or the one
 # above it) that is not the user's own or that a group or others may write to, is refused. The command runs as 65534
 # here: every folder of the needs must be readable and searchable by others, every file readable by others (the
 # hive's tool makes them 0755 and 0444).
-needs=$(getent passwd "$(id -u)" | cut -d: -f6) || needs=
+needs=$(getent passwd "$(id -u)" 2>/dev/null | cut -d: -f6) || needs=
 needs=${needs:+${needs%/}/.hive/needs/bee-ruche/cjsonrustbee}
 mounts=()
 if [ -n "$needs" ] && { [ -e "$needs" ] || [ -L "$needs" ]; }; then
@@ -46,6 +57,8 @@ if [ -n "$needs" ] && { [ -e "$needs" ] || [ -L "$needs" ]; }; then
   mounts=(--mount "type=bind,source=$needs,target=/needs,readonly")
 fi
 
-exec docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges --user 65534:65534 \
+# (MSYS_NO_PATHCONV: on Git Bash for Windows, the paths of the line, /work among them, would otherwise be rewritten
+# into Windows paths on their way to docker.exe. Nothing else reads it.)
+exec env PATH="$docker_path" MSYS_NO_PATHCONV=1 "$docker" run --rm --network none --cap-drop ALL --security-opt no-new-privileges --user 65534:65534 \
   --tmpfs /tmp:rw,exec,size=512m -e HOME=/tmp ${mounts[@]+"${mounts[@]}"} \
   --mount "type=bind,source=$repo,target=/work,readonly" -w /work bee-cjson "$@"

@@ -37,6 +37,8 @@ folder, or when it or the folder above it is not yours or may be written by a gr
 nor removed, nor anything in it written), and refuses if what it bound is not the folder it checked. `docker.sh`
 binds it read-only and runs the command as user 65534: it refuses a folder or a file of the needs that others
 cannot read (folders 0755, files 0444, as the tool makes them), and a path with a comma or a quote, which docker's
-`--mount` cannot take. Both find the home with `getent`, which macOS lacks:
-there `docker.sh` shows no `/needs`. The project declares no `needs` today, so nothing changes for it until it does.
+`--mount` cannot take. `docker.sh` runs the docker your `PATH` names, with your `PATH` less its relative folders
+and those in the work tree. Both find the home with `getent`, which macOS and Git Bash for Windows lack: there
+`docker.sh` shows no `/needs` and runs as before. The project declares no `needs` today, so nothing changes for it
+until it does.
 

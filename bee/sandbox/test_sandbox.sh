@@ -534,6 +534,13 @@ else
   needs_run "$pw" 'cat /needs/data.bin; touch ran-with-a-swapped-folder' "mount --bind $(printf %q "$top/swapping-mount") /usr/bin/mount"
   verdict n11 "the needs' folder swapped for a link between the check and the bind: no run, a reason" \
     "$([ "$rc" -eq 125 ] && [ ! -e "$repo/ran-with-a-swapped-folder" ] && grep -q "changed while the sandbox was being built" <<<"$out"; echo $?)" "rc $rc: $(first_line "$out")"
+  # A remount of /needs read-only that silently does nothing (a stand-in for mount(8) that skips it): the launcher's
+  # own check of what is writable inside must catch it.
+  printf '#!/bin/sh\nfor last; do :; done\ncase "$1 $2" in "-o remount,bind,"*) case "$last" in */needs) exit 0 ;; esac ;; esac\nexec %q "$@"\n' \
+    "$top/real-mount" >"$top/lazy-mount"; chmod 755 "$top/lazy-mount"
+  needs_run "$pw" 'touch ran-with-a-writable-needs' "mount --bind $(printf %q "$top/lazy-mount") /usr/bin/mount"
+  verdict n14 "a remount of /needs read-only that did nothing: the launcher sees /needs writable, no run, a reason" \
+    "$([ "$rc" -eq 125 ] && [ ! -e "$repo/ran-with-a-writable-needs" ] && grep -q "/needs is writable inside the sandbox" <<<"$out"; echo $?)" "rc $rc: $(first_line "$out")"
   needs_run "$pw" 'touch ran-with-a-777-folder' 'chmod 777 "$f"'; rc1=$rc; out1=$out
   needs_run "$pw" 'touch ran-with-a-775-parent' 'chmod 775 "${f%/*}"'
   verdict n12 "a needs' folder others may write to (777), or the folder above it a group may write to (775): no run, a reason" \
